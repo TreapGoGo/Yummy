@@ -1,38 +1,32 @@
 .yummy-paragraph-container {
-    /* position: relative; is now removed to allow global alignment */
+    position: static;
 }
 
 .yummy-rating-bar {
     position: absolute;
     left: -85px;
-    /* Position the bar to the left of the paragraph */
-    top: 0;
-    /* top & height are now set dynamically by JS */
     width: 80px;
     display: flex;
     flex-direction: row;
     justify-content: center;
-    /* Center buttons horizontally */
-    align-items: flex-start;
-    /* Align buttons to the top */
+    align-items: center;
+    gap: 4px;
     opacity: 0;
-    /* Hidden by default */
     transition: opacity 0.2s ease-in-out;
+    padding: 2px 0;
 }
 
 .yummy-paragraph-container:hover .yummy-rating-bar {
     opacity: 1;
-    /* Show on hover */
 }
 
 .yummy-rating-button {
     cursor: pointer;
     font-size: 16px;
     padding: 2px;
-    margin-right: 5px;
-    /* 添加右边距用于横向间隔 */
     border-radius: 4px;
     transition: transform 0.1s ease-in-out;
+    line-height: 1;
 }
 
 .yummy-rating-button:hover {
@@ -41,10 +35,98 @@
 
 .yummy-liked {
     background-color: rgba(221, 247, 221, 0.8) !important;
-    /* light green with transparency */
 }
 
 .yummy-disliked {
     background-color: rgba(255, 221, 221, 0.8) !important;
-    /* light red with transparency */
+}
+
+.yummy-liked>ul,
+.yummy-liked>ol,
+.yummy-disliked>ul,
+.yummy-disliked>ol {
+    background-color: #FFFFFF !important;
+}
+
+/* --- Control Panel for Selection Mode --- */
+.yummy-control-panel {
+    position: fixed;
+    top: 50%;
+    right: 20px;
+    transform: translateY(-50%);
+    padding: 0;
+    z-index: 9998;
+}
+
+.yummy-control-button {
+    cursor: pointer;
+    font-size: 24px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    transition: all 0.2s ease-in-out;
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.yummy-control-button:hover {
+    transform: scale(1.1);
+    background-color: #e0e0e0;
+}
+
+.yummy-control-button.active {
+    background-color: #4CAF50;
+    color: white;
+    border-color: #4CAF50;
+    box-shadow: 0 0 10px #4CAF50;
+}
+
+/* --- Selection Highlight Style --- */
+.yummy-selection-highlight {
+    background-color: yellow !important;
+    color: black !important;
+    cursor: pointer;
+}
+
+/* --- Quick Highlight Popup --- */
+#yummy-quick-highlight-button {
+    position: fixed;
+    z-index: 10000;
+    cursor: pointer;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background-color: rgba(255, 255, 255, 0.95);
+    border: 1px solid #ddd;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    transition: transform 0.1s ease-in-out;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-size: 18px;
+}
+
+#yummy-quick-highlight-button:hover {
+    transform: scale(1.1);
+}
+
+/* --- NEW: Selection Mode Cursor and Follower --- */
+
+body.yummy-selection-mode-active {
+    cursor: text !important;
+}
+
+#yummy-cursor-follower {
+    position: absolute;
+    display: none;
+    z-index: 10001;
+    font-size: 16px;
+    pointer-events: none;
+    /* Set a stable origin for the transform property */
+    top: 0;
+    left: 0;
 }
