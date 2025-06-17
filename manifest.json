@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Yummy!",
-    "version": "0.1.1",
+    "version": "0.1.3",
     "description": "精细取舍",
     "content_scripts": [
         {

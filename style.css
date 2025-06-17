@@ -48,7 +48,7 @@
     background-color: #FFFFFF !important;
 }
 
-/* --- Control Panel for Selection Mode --- */
+/* --- Control Panel --- */
 .yummy-control-panel {
     position: fixed;
     top: 50%;
@@ -56,6 +56,15 @@
     transform: translateY(-50%);
     padding: 0;
     z-index: 9998;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: opacity 0.3s ease-in-out;
+}
+
+.yummy-control-panel.dimmed {
+    opacity: 0.3;
+    pointer-events: none;
 }
 
 .yummy-control-button {
@@ -84,14 +93,13 @@
     box-shadow: 0 0 10px #4CAF50;
 }
 
-/* --- Selection Highlight Style --- */
+/* --- Selection Highlight & Popups --- */
 .yummy-selection-highlight {
     background-color: yellow !important;
     color: black !important;
     cursor: pointer;
 }
 
-/* --- Quick Highlight Popup --- */
 #yummy-quick-highlight-button {
     position: fixed;
     z-index: 10000;
@@ -103,7 +111,7 @@
     border: 1px solid #ddd;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     transition: transform 0.1s ease-in-out;
-    display: flex;
+    display: none;
     align-items: center;
     justify-content: center;
     padding: 0;
@@ -113,8 +121,6 @@
 #yummy-quick-highlight-button:hover {
     transform: scale(1.1);
 }
-
-/* --- NEW: Selection Mode Cursor and Follower --- */
 
 body.yummy-selection-mode-active {
     cursor: text !important;
@@ -126,7 +132,134 @@ body.yummy-selection-mode-active {
     z-index: 10001;
     font-size: 16px;
     pointer-events: none;
-    /* Set a stable origin for the transform property */
     top: 0;
     left: 0;
+}
+
+#yummy-copy-toast {
+    position: fixed;
+    display: none;
+    z-index: 10002;
+    padding: 8px 12px;
+    background-color: rgba(17, 24, 39, 0.85);
+    color: white;
+    border-radius: 6px;
+    font-size: 14px;
+    pointer-events: none;
+}
+
+/* --- Collection Panel (Left Drawer) --- */
+#yummy-collection-panel {
+    position: fixed;
+    top: 0;
+    right: -350px;
+    width: 350px;
+    height: 100%;
+    background-color: rgba(249, 250, 251, 0.98);
+    border-left: 1px solid #e5e7eb;
+    box-shadow: -4px 0 15px rgba(0, 0, 0, 0.1);
+    z-index: 9999;
+    transition: right 0.3s ease-in-out;
+    display: flex;
+    flex-direction: column;
+}
+
+#yummy-collection-panel.visible {
+    right: 0;
+}
+
+#yummy-collection-header {
+    padding: 12px 16px;
+    font-weight: 600;
+    color: #111827;
+    border-bottom: 1px solid #e5e7eb;
+    cursor: pointer;
+    text-align: center;
+    flex-shrink: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+}
+
+#yummy-collection-header:hover {
+    background-color: #f3f4f6;
+}
+
+#yummy-collection-pin-btn {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 18px;
+    cursor: pointer;
+    color: #6b7280;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+#yummy-collection-pin-btn:hover {
+    background-color: #e5e7eb;
+    color: #111827;
+}
+
+#yummy-collection-pin-btn.pinned {
+    color: #3b82f6;
+    transform: translateY(-50%) rotate(-45deg);
+}
+
+#yummy-collection-content {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.yummy-collection-item {
+    position: relative;
+    background-color: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 10px;
+    padding-right: 35px;
+    font-size: 14px;
+    line-height: 1.5;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+
+.yummy-collection-item:hover {
+    background-color: #eff6ff;
+}
+
+.yummy-collection-item.copied {
+    background-color: #d1fae5;
+    transition: background-color 0.1s;
+}
+
+.yummy-collection-item-copy-icon {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 18px;
+    opacity: 0;
+    transition: opacity 0.2s, transform 0.1s;
+    padding: 2px;
+    border-radius: 4px;
+    color: #6b7280;
+}
+
+.yummy-collection-item:hover .yummy-collection-item-copy-icon {
+    opacity: 0.6;
+}
+
+.yummy-collection-item-copy-icon:hover {
+    opacity: 1;
+    transform: scale(1.1);
+    color: #1f2937;
 }
