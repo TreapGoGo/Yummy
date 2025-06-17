@@ -1,0 +1,50 @@
+.yummy-paragraph-container {
+    /* position: relative; is now removed to allow global alignment */
+}
+
+.yummy-rating-bar {
+    position: absolute;
+    left: -85px;
+    /* Position the bar to the left of the paragraph */
+    top: 0;
+    /* top & height are now set dynamically by JS */
+    width: 80px;
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    /* Center buttons horizontally */
+    align-items: flex-start;
+    /* Align buttons to the top */
+    opacity: 0;
+    /* Hidden by default */
+    transition: opacity 0.2s ease-in-out;
+}
+
+.yummy-paragraph-container:hover .yummy-rating-bar {
+    opacity: 1;
+    /* Show on hover */
+}
+
+.yummy-rating-button {
+    cursor: pointer;
+    font-size: 16px;
+    padding: 2px;
+    margin-right: 5px;
+    /* 添加右边距用于横向间隔 */
+    border-radius: 4px;
+    transition: transform 0.1s ease-in-out;
+}
+
+.yummy-rating-button:hover {
+    transform: scale(1.2);
+}
+
+.yummy-liked {
+    background-color: rgba(221, 247, 221, 0.8) !important;
+    /* light green with transparency */
+}
+
+.yummy-disliked {
+    background-color: rgba(255, 221, 221, 0.8) !important;
+    /* light red with transparency */
+}
