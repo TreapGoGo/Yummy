@@ -27,10 +27,33 @@
     border-radius: 4px;
     transition: transform 0.1s ease-in-out;
     line-height: 1;
+    -webkit-user-select: none;
+    /* Safari */
+    -ms-user-select: none;
+    /* IE 10+ and Edge */
+    user-select: none;
+    /* Standard syntax */
 }
 
 .yummy-rating-button:hover {
     transform: scale(1.2);
+}
+
+@keyframes yummy-flash-background {
+
+    0%,
+    100% {
+        background-color: transparent;
+    }
+
+    50% {
+        background-color: rgba(229, 231, 235, 0.7);
+        /* A light gray, semi-transparent */
+    }
+}
+
+.yummy-flash {
+    animation: yummy-flash-background 0.5s ease-in-out;
 }
 
 .yummy-liked {
@@ -60,6 +83,17 @@
     flex-direction: column;
     gap: 10px;
     transition: opacity 0.3s ease-in-out;
+}
+
+.yummy-control-panel>*:not(#yummy-collapse-toggle) {
+    transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+    transform: translateX(0);
+}
+
+.yummy-control-panel.collapsed>*:not(#yummy-collapse-toggle) {
+    opacity: 0;
+    transform: translateX(calc(100% + 30px));
+    pointer-events: none;
 }
 
 .yummy-control-panel.dimmed {
@@ -248,7 +282,7 @@ body.yummy-selection-mode-active {
     transition: background-color 0.2s, border-left-color 0.2s;
     word-wrap: break-word;
     white-space: pre-wrap;
-    border-left: 3px solid transparent;
+    border-left: 3px solid #d1d5db;
 }
 
 .yummy-collection-item.starred {

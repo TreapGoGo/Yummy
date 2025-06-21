@@ -41,8 +41,13 @@ function addRatingBar(element) {
     likeButton.title = '想吃 (Like)';
     likeButton.addEventListener('click', (e) => {
         e.stopPropagation();
-        const isAlreadyLiked = element.classList.contains('yummy-liked');
-        applyHierarchicalState(element, isAlreadyLiked ? 'none' : 'liked');
+        const isParent = /H[1-6]/.test(element.tagName);
+        if (isParent) {
+            handleParentRating(element, 'liked');
+        } else {
+            const isAlreadyLiked = element.classList.contains('yummy-liked');
+            applyHierarchicalState(element, isAlreadyLiked ? 'none' : 'liked');
+        }
     });
     const dislikeButton = document.createElement('span');
     dislikeButton.className = 'yummy-rating-button';
@@ -50,8 +55,13 @@ function addRatingBar(element) {
     dislikeButton.title = '想吐 (Dislike)';
     dislikeButton.addEventListener('click', (e) => {
         e.stopPropagation();
-        const isAlreadyDisliked = element.classList.contains('yummy-disliked');
-        applyHierarchicalState(element, isAlreadyDisliked ? 'none' : 'disliked');
+        const isParent = /H[1-6]/.test(element.tagName);
+        if (isParent) {
+            handleParentRating(element, 'disliked');
+        } else {
+            const isAlreadyDisliked = element.classList.contains('yummy-disliked');
+            applyHierarchicalState(element, isAlreadyDisliked ? 'none' : 'disliked');
+        }
     });
     ratingBar.appendChild(likeButton);
     ratingBar.appendChild(dislikeButton);
@@ -64,6 +74,60 @@ function processNewElements() {
     document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR).forEach(element => {
         if (!element.dataset.yummyProcessed) addRatingBar(element);
     });
+}
+
+const parentClickState = new Map();
+
+function handleParentRating(parentElement, newRating) {
+    const state = parentClickState.get(parentElement) || {
+        rating: 'none',
+        level: 0
+    };
+    const children = getSubsequentSiblings(parentElement);
+
+    // Case 1: Clicking the same button again to escalate or toggle off.
+    if (newRating === state.rating) {
+        if (state.level === 1) {
+            // --- Second click: Escalate to full block rating ---
+            state.level = 2;
+            children.forEach(child => applyHierarchicalState(child, newRating));
+            logger.debug(`块状评价 (二次点击): ${newRating}`, parentElement);
+        } else { // state.level is 2 or 0
+            // --- Toggle off a fully rated block ---
+            state.rating = 'none';
+            state.level = 0;
+            applyHierarchicalState(parentElement, 'none');
+            children.forEach(child => applyHierarchicalState(child, 'none'));
+            logger.debug(`块状评价 (取消): none`, parentElement);
+        }
+    }
+    // Case 2: Clicking a different button (e.g., 'like' when it was 'disliked')
+    else {
+        // If the block was previously fully rated with a different opinion, flip the whole block.
+        if (state.level === 2) {
+            // --- Flip opinion on a fully rated block ---
+            state.rating = newRating;
+            // state.level remains 2
+            applyHierarchicalState(parentElement, newRating);
+            children.forEach(child => applyHierarchicalState(child, newRating));
+            logger.debug(`块状评价 (翻转): ${newRating}`, parentElement);
+        }
+        // Otherwise, it's a "first click" for this new rating type.
+        else {
+            // --- First click from neutral or partially rated state ---
+            state.rating = newRating;
+            state.level = 1;
+            // Clear all previous states before applying the new one
+            applyHierarchicalState(parentElement, 'none');
+            children.forEach(child => applyHierarchicalState(child, 'none')); // Clear children just in case
+            // Apply new state
+            applyHierarchicalState(parentElement, newRating);
+            children.forEach(child => flashElement(child));
+            logger.debug(`块状评价 (首次点击): ${newRating}`, parentElement);
+        }
+    }
+
+    parentClickState.set(parentElement, state);
 }
 
 let debounceTimer = null;
@@ -112,76 +176,120 @@ const observer = new MutationObserver(debouncedProcessNewElements);
 
     // --- Prompt Generation Logic ---
     function collectMarkedData() {
-        const uniqueText = (selector) => {
+        const uniqueText = (selector, minLength = 0, maxLength = Infinity) => {
             const elements = document.querySelectorAll(selector);
             const texts = new Set();
-            elements.forEach(el => texts.add(getCleanText(el)));
-            return Array.from(texts).filter(Boolean); // Filter out any potential empty strings
+            elements.forEach(el => {
+                const text = getCleanText(el);
+                if (text.length >= minLength && text.length <= maxLength) {
+                    texts.add(text);
+                }
+            });
+            return Array.from(texts).filter(Boolean);
         };
-        const likes = uniqueText('.yummy-liked');
+
+        const KEYWORD_MAX_LENGTH = 15; // A a threshold to separate keywords from sentences.
+
+        // Likes are always full paragraphs/blocks
+        const likedParagraphs = uniqueText('.yummy-liked');
+        // All highlights
+        const allHighlights = uniqueText('.yummy-selection-highlight');
+        // Dislikes for avoidance
         const dislikes = uniqueText('.yummy-disliked');
-        const highlights = uniqueText('.yummy-selection-highlight');
+
+        // Segregate highlights into sentences and keywords
+        const highlightedSentences = allHighlights.filter(t => t.length > KEYWORD_MAX_LENGTH);
+        const highlightedKeywords = allHighlights.filter(t => t.length <= KEYWORD_MAX_LENGTH);
+
         logger.info('收集到的数据:', {
-            likes,
-            dislikes,
-            highlights
+            likedParagraphs,
+            highlightedSentences,
+            highlightedKeywords,
+            dislikes
         });
+
         return {
-            likes,
-            dislikes,
-            highlights
+            likedParagraphs,
+            highlightedSentences,
+            highlightedKeywords,
+            dislikes
         };
     }
 
     function buildPrompt(mode, data) {
         const {
-            likes,
-            dislikes,
-            highlights
+            likedParagraphs,
+            highlightedSentences,
+            highlightedKeywords,
+            dislikes
         } = data;
         let prompt = '';
 
         if (mode === 'organize') {
-            const likesToOrganize = likes.length > 0 ? `### 需要整理的"喜欢"内容\n- ${likes.join('\n- ')}\n` : '';
-            const highlightsToOrganize = highlights.length > 0 ? `### 需要整理的"高亮"内容\n- ${highlights.join('\n- ')}\n` : '';
-            const dislikesToAvoid = dislikes.length > 0 ? `### 必须规避的"不喜欢"内容\n- ${dislikes.join('\n- ')}\n` : '';
-            const materials = [likesToOrganize, highlightsToOrganize, dislikesToAvoid].filter(Boolean).join('\n');
+            const coreParagraphsText = likedParagraphs.length > 0 ?
+                `### 核心段落\n${likedParagraphs.join('\n\n')}` :
+                '';
 
-            prompt = `你是一个严谨的内容整理助手。
-你的任务是根据我提供的"喜欢"和"高亮"内容，原封不动地进行整理。
+            const keySentencesText = highlightedSentences.length > 0 ?
+                `### 关键句\n${highlightedSentences.join('\n')}` :
+                '';
+
+            const keywordsText = highlightedKeywords.length > 0 ?
+                `### 关键词\n${highlightedKeywords.join('\n')}` :
+                '';
+
+            const materials = [coreParagraphsText, keySentencesText, keywordsText].filter(Boolean).join('\n\n');
+
+            prompt = `你是一位专业的文书助理。你的任务是根据我提供的三类素材（核心段落、关键句、关键词），将它们重新整理成一份干净、结构化的文档。
+
+**整理规则：**
+1.  **核心段落处理**：将【核心段落】部分的内容**完全原封不动**地复制下来，保持它们之间的原有顺序和段落格式。
+2.  **关键句处理**：将【关键句】部分的内容，以无序列表（即在每一句前加上 \`- \`）的形式一一列出。
+3.  **关键词处理**：将【关键词】部分的所有词语，用逗号（\`， \`）连接，形成单行索引。
+4.  **最终输出格式**：
+    *   严格按照"核心段落"、"关键句"、"关键词"的顺序组合你的输出。
+    *   如果同时存在多个部分，在不同部分之间用一个水平分割线 (\`---\`) 隔开。
+    *   你的回答中**绝对不能出现**"### 核心段落"、"### 关键句"、"### 关键词"这些分类标题，也**绝对不能包含**任何我在这里给你的、在"整理规则"下的指示性文字。你的回答应该直接从第一个核心段落的内容开始，或者从第一条关键句开始。
 
 ---
+**【素材】**
+
 ${materials}
----
-
-请严格按照以下要求开始整理：
-1.  只输出整理后的内容本身，保持原始表述，不要删改或扩写。
-2.  不要添加任何开场白、标题、总结、解释或结束语。
-3.  绝对不要提及或包含任何"不喜欢"列表中的内容。`;
+---`;
 
         } else if (mode === 'diverge') {
-            const likesForInspiration = likes.length > 0 ? `### 创作的主要依据 (我喜欢的内容)\n- ${likes.join('\n- ')}\n` : '';
-            const highlightsForInspiration = highlights.length > 0 ? `### 创作的补充灵感 (我划线强调的内容)\n- ${highlights.join('\n- ')}\n` : '';
-            const dislikesToAvoid = dislikes.length > 0 ? `### 绝对要避免的主题 (我不喜欢的内容)\n- ${dislikes.join('\n- ')}\n` : '';
-            const materials = [likesForInspiration, highlightsForInspiration, dislikesToAvoid].filter(Boolean).join('\n');
+            const inspiration = [...likedParagraphs, ...highlightedSentences, ...highlightedKeywords];
+            const inspirationText = inspiration.length > 0 ?
+                `- ${inspiration.join('\n- ')}` :
+                '无';
 
-            prompt = `你是一个富有创意的灵感激发助手。
-请根据我"喜欢"和"高亮"的内容进行自由发散创作，但要确保内容与主题相关。
+            const avoidanceText = dislikes.length > 0 ?
+                `- ${dislikes.join('\n- ')}` :
+                '无';
 
+            prompt = `请基于我标记为"喜欢"和"高亮"的内容，进行自由的发散创作，帮我探索一些新的可能性。
+
+**灵感来源 (我喜欢的内容):**
 ---
-${materials}
+${inspirationText}
 ---
 
-请开始你的创作。请注意：
-1.  你的创作应该富有想象力，但不能偏离主题。
-2.  在任何情况下，都绝对不能在你的回答中提及、暗示或包含任何"不喜欢"列表中的内容。`;
+**创作禁区 (我不喜欢的内容，请务必规避):**
+---
+${avoidanceText}
+---
+
+**关键要求：**
+1. **主题相关**：你的创作可以天马行空，但必须与"灵感来源"的主题保持相关性。
+2. **严格规避**：在任何情况下，都绝对不能在你的回答中提及、暗示或包含任何"创作禁区"里的内容。
+3. **自由发挥**：请大胆地进行联想、引申和创造。`;
         }
         return prompt.trim();
     }
 
     function generateAndApplyPrompt(mode) {
         const data = collectMarkedData();
-        if (data.likes.length === 0 && data.highlights.length === 0) {
+        if (data.likedParagraphs.length === 0 && data.highlightedKeywords.length === 0) {
             alert('Yummy提示：\n请先标记一些"喜欢"的内容或划线一些内容，才能生成提示词哦！');
             return;
         }
@@ -485,18 +593,6 @@ ${materials}
         }
         menu.style.top = `${y}px`;
         menu.style.left = `${x}px`;
-
-        const outsideClickListener = (e) => {
-            if (!menu.contains(e.target)) {
-                closeActiveContextMenu();
-                document.removeEventListener('click', outsideClickListener);
-                document.removeEventListener('contextmenu', outsideClickListener);
-            }
-        };
-        setTimeout(() => {
-            document.addEventListener('click', outsideClickListener);
-            document.addEventListener('contextmenu', outsideClickListener);
-        }, 0);
     }
 
     function collectHighlights() {
@@ -578,7 +674,7 @@ ${materials}
         const selectionModeButton = document.createElement('button');
         selectionModeButton.id = 'yummy-selection-mode-toggle';
         selectionModeButton.className = 'yummy-control-button';
-        selectionModeButton.innerHTML = '✒️';
+        selectionModeButton.innerHTML = EMOJI_LIKE;
         selectionModeButton.title = '开启/关闭划词模式 (按Esc可快速退出)';
 
         const collectionToggleButton = document.createElement('button');
@@ -605,7 +701,7 @@ ${materials}
         const divergeBtn = document.createElement('button');
         divergeBtn.className = 'yummy-control-button';
         divergeBtn.id = 'yummy-diverge-btn';
-        divergeBtn.textContent = '✨';
+        divergeBtn.textContent = '💡';
         divergeBtn.title = '发散模式: 基于您标记的内容进行创意发挥。';
         divergeBtn.addEventListener('click', () => generateAndApplyPrompt('diverge'));
 
@@ -622,6 +718,18 @@ ${materials}
             autoSendBtn.title = isAutoSendActive ? '自动发送已开启，点击关闭' : '自动发送已关闭，点击开启';
         });
 
+        const separator3 = document.createElement('hr');
+
+        const collapseBtn = document.createElement('button');
+        collapseBtn.className = 'yummy-control-button';
+        collapseBtn.id = 'yummy-collapse-toggle';
+        collapseBtn.textContent = '▶️';
+        collapseBtn.title = '收起/展开面板';
+        collapseBtn.addEventListener('click', () => {
+            const isCollapsed = controlPanel.classList.toggle('collapsed');
+            collapseBtn.textContent = isCollapsed ? '◀️' : '▶️';
+        });
+
 
         controlPanel.appendChild(selectionModeButton);
         controlPanel.appendChild(collectionToggleButton);
@@ -631,6 +739,8 @@ ${materials}
         controlPanel.appendChild(divergeBtn);
         controlPanel.appendChild(separator2);
         controlPanel.appendChild(autoSendBtn);
+        controlPanel.appendChild(separator3);
+        controlPanel.appendChild(collapseBtn);
         document.body.appendChild(controlPanel);
 
         collectionPanel = document.createElement('div');
@@ -735,7 +845,7 @@ ${materials}
             if (!isCollectionPanelPinned && !activeContextMenu) {
                 collectionHideTimer = setTimeout(() => {
                     collectionPanel.classList.remove('visible');
-                }, 300);
+                }, 1000);
             }
         });
 
@@ -770,14 +880,20 @@ ${materials}
         document.addEventListener('keydown', quickExitSelectionMode);
         document.addEventListener('mousemove', onMouseMove);
 
-        // Hide quick highlight button on scroll or click
-        document.addEventListener('scroll', () => {
-            if (quickHighlightButton) quickHighlightButton.style.display = 'none';
-        });
+        // Global listeners for UI cleanup
         document.addEventListener('mousedown', (e) => {
+            // Hide quick highlight button on any click
             if (quickHighlightButton && e.target !== quickHighlightButton) {
                 quickHighlightButton.style.display = 'none';
             }
+
+            // Close context menu on outside click
+            if (activeContextMenu && !activeContextMenu.contains(e.target)) {
+                closeActiveContextMenu();
+            }
+        });
+        document.addEventListener('scroll', () => {
+            if (quickHighlightButton) quickHighlightButton.style.display = 'none';
         });
     }
 
@@ -794,3 +910,43 @@ function initializeYummy() {
 }
 
 initializeYummy();
+
+function getSubsequentSiblings(startElement) {
+    const allElements = Array.from(document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR));
+    const startIndex = allElements.indexOf(startElement);
+
+    if (startIndex === -1) return [];
+
+    const results = [];
+    const startLevel = parseInt(startElement.tagName.substring(1));
+    const startTurn = startElement.closest('.group\\/conversation-turn');
+
+
+    for (let i = startIndex + 1; i < allElements.length; i++) {
+        const currentElement = allElements[i];
+
+        // Stop if we've moved to a different conversation turn
+        const currentTurn = currentElement.closest('.group\\/conversation-turn');
+        if (startTurn !== currentTurn) {
+            break;
+        }
+
+        // Check if it's a heading that breaks the block
+        if (currentElement.tagName.match(/H[1-6]/)) {
+            const currentLevel = parseInt(currentElement.tagName.substring(1));
+            if (currentLevel <= startLevel) {
+                // We've hit a sibling or parent-level heading, so we stop.
+                break;
+            }
+        }
+        results.push(currentElement);
+    }
+    return results;
+}
+
+function flashElement(element) {
+    element.classList.add('yummy-flash');
+    setTimeout(() => {
+        element.classList.remove('yummy-flash');
+    }, 500); // Flash duration
+}
