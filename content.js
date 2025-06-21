@@ -68,7 +68,7 @@ function addRatingBar(element) {
     container.appendChild(ratingBar);
 }
 
-const CONTENT_ELEMENTS_SELECTOR = `[data-message-author-role="assistant"] h1, [data-message-author-role="assistant"] h2, [data-message-author-role="assistant"] h3, [data-message-author-role="assistant"] h4, [data-message-author-role="assistant"] h5, [data-message-author-role="assistant"] h6, [data-message-author-role="assistant"] p, [data-message-author-role="assistant"] pre, [data-message-author-role="assistant"] li`;
+const CONTENT_ELEMENTS_SELECTOR = `[data-message-author-role="assistant"] h1, [data-message-author-role="assistant"] h2, [data-message-author-role="assistant"] h3, [data-message-author-role="assistant"] h4, [data-message-author-role="assistant"] h5, [data-message-author-role="assistant"] h6, [data-message-author-role="assistant"] p, [data-message-author-role="assistant"] pre, [data-message-author-role="assistant"] li, [data-message-author-role="assistant"] table`;
 
 function processNewElements() {
     document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR).forEach(element => {
@@ -912,34 +912,31 @@ function initializeYummy() {
 initializeYummy();
 
 function getSubsequentSiblings(startElement) {
-    const allElements = Array.from(document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR));
-    const startIndex = allElements.indexOf(startElement);
+    const selector = `${CONTENT_ELEMENTS_SELECTOR}, [data-message-author-role="assistant"] hr`;
+    const allNodes = Array.from(document.querySelectorAll(selector));
+    const startIndex = allNodes.indexOf(startElement);
 
     if (startIndex === -1) return [];
 
     const results = [];
     const startLevel = parseInt(startElement.tagName.substring(1));
-    const startTurn = startElement.closest('.group\\/conversation-turn');
 
+    for (let i = startIndex + 1; i < allNodes.length; i++) {
+        const currentNode = allNodes[i];
 
-    for (let i = startIndex + 1; i < allElements.length; i++) {
-        const currentElement = allElements[i];
-
-        // Stop if we've moved to a different conversation turn
-        const currentTurn = currentElement.closest('.group\\/conversation-turn');
-        if (startTurn !== currentTurn) {
+        // Stop if we hit a horizontal rule
+        if (currentNode.tagName === 'HR') {
             break;
         }
 
         // Check if it's a heading that breaks the block
-        if (currentElement.tagName.match(/H[1-6]/)) {
-            const currentLevel = parseInt(currentElement.tagName.substring(1));
+        if (currentNode.tagName.match(/H[1-6]/)) {
+            const currentLevel = parseInt(currentNode.tagName.substring(1));
             if (currentLevel <= startLevel) {
-                // We've hit a sibling or parent-level heading, so we stop.
                 break;
             }
         }
-        results.push(currentElement);
+        results.push(currentNode);
     }
     return results;
 }
