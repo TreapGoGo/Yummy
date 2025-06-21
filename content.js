@@ -175,9 +175,9 @@ const observer = new MutationObserver(debouncedProcessNewElements);
 
 
     // --- Prompt Generation Logic ---
-    function collectMarkedData() {
+    function collectMarkedData(scopeElement = document.body) {
         const uniqueText = (selector, minLength = 0, maxLength = Infinity) => {
-            const elements = document.querySelectorAll(selector);
+            const elements = scopeElement.querySelectorAll(selector);
             const texts = new Set();
             elements.forEach(el => {
                 const text = getCleanText(el);
@@ -287,12 +287,28 @@ ${avoidanceText}
         return prompt.trim();
     }
 
-    function generateAndApplyPrompt(mode) {
-        const data = collectMarkedData();
-        if (data.likedParagraphs.length === 0 && data.highlightedKeywords.length === 0) {
-            alert('Yummy提示：\n请先标记一些"喜欢"的内容或划线一些内容，才能生成提示词哦！');
+    function generateAndApplyPrompt(mode, event) {
+        const isGlobal = event.shiftKey;
+        const scope = isGlobal ?
+            document.body :
+            Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).pop()?.closest('div.group\\/conversation-turn');
+
+        if (!scope) {
+            alert('Yummy错误：\n找不到任何AI回复内容可供处理。');
+            logger.error('找不到AI回复区块。');
             return;
         }
+
+        const data = collectMarkedData(scope);
+
+        if (data.likedParagraphs.length === 0 && data.highlightedSentences.length === 0 && data.highlightedKeywords.length === 0) {
+            const message = isGlobal ?
+                'Yummy提示：\n在整个页面中没有找到任何"喜欢"或高亮的内容。' :
+                'Yummy提示：\n在最新的AI回复中没有找到任何"喜欢"或高亮的内容。\n\n（小技巧：按住Shift再点击，可以处理整个页面的内容）';
+            alert(message);
+            return;
+        }
+
         const prompt = buildPrompt(mode, data);
         const inputBox = document.querySelector('#prompt-textarea');
 
@@ -695,15 +711,15 @@ ${avoidanceText}
         organizeBtn.className = 'yummy-control-button';
         organizeBtn.id = 'yummy-organize-btn';
         organizeBtn.textContent = '📝';
-        organizeBtn.title = '整理模式: 严谨地整理您标记的内容，不进行任何扩写。';
-        organizeBtn.addEventListener('click', () => generateAndApplyPrompt('organize'));
+        organizeBtn.title = '整理模式 (单击: 最新, Shift+单击: 全部)';
+        organizeBtn.addEventListener('click', (e) => generateAndApplyPrompt('organize', e));
 
         const divergeBtn = document.createElement('button');
         divergeBtn.className = 'yummy-control-button';
         divergeBtn.id = 'yummy-diverge-btn';
         divergeBtn.textContent = '💡';
-        divergeBtn.title = '发散模式: 基于您标记的内容进行创意发挥。';
-        divergeBtn.addEventListener('click', () => generateAndApplyPrompt('diverge'));
+        divergeBtn.title = '发散模式 (单击: 最新, Shift+单击: 全部)';
+        divergeBtn.addEventListener('click', (e) => generateAndApplyPrompt('diverge', e));
 
         const separator2 = document.createElement('hr');
 
