@@ -93,6 +93,7 @@ const observer = new MutationObserver(debouncedProcessNewElements);
     let copyToast = null;
     let isCollectionPanelPinned = false;
     let isAutoSendActive = true;
+    let activeContextMenu = null;
 
     // --- UTILITY ---
     /**
@@ -102,8 +103,9 @@ const observer = new MutationObserver(debouncedProcessNewElements);
      * @returns {string} The cleaned text content.
      */
     const getCleanText = (element) => {
+        if (!element) return '';
         const clone = element.cloneNode(true);
-        clone.querySelectorAll('.yummy-rating-bar').forEach(ui => ui.remove());
+        clone.querySelectorAll('.yummy-rating-bar, .yummy-selection-highlight, .yummy-control-panel, #yummy-quick-highlight-button, #yummy-collection-panel').forEach(ui => ui.remove());
         return clone.textContent.trim();
     };
 
@@ -140,13 +142,13 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         let prompt = '';
 
         if (mode === 'organize') {
-            const likesToOrganize = likes.length > 0 ? `### 需要整理的“喜欢”内容\n- ${likes.join('\n- ')}\n` : '';
-            const highlightsToOrganize = highlights.length > 0 ? `### 需要整理的“高亮”内容\n- ${highlights.join('\n- ')}\n` : '';
-            const dislikesToAvoid = dislikes.length > 0 ? `### 必须规避的“不喜欢”内容\n- ${dislikes.join('\n- ')}\n` : '';
+            const likesToOrganize = likes.length > 0 ? `### 需要整理的"喜欢"内容\n- ${likes.join('\n- ')}\n` : '';
+            const highlightsToOrganize = highlights.length > 0 ? `### 需要整理的"高亮"内容\n- ${highlights.join('\n- ')}\n` : '';
+            const dislikesToAvoid = dislikes.length > 0 ? `### 必须规避的"不喜欢"内容\n- ${dislikes.join('\n- ')}\n` : '';
             const materials = [likesToOrganize, highlightsToOrganize, dislikesToAvoid].filter(Boolean).join('\n');
 
             prompt = `你是一个严谨的内容整理助手。
-你的任务是根据我提供的“喜欢”和“高亮”内容，原封不动地进行整理。
+你的任务是根据我提供的"喜欢"和"高亮"内容，原封不动地进行整理。
 
 ---
 ${materials}
@@ -155,7 +157,7 @@ ${materials}
 请严格按照以下要求开始整理：
 1.  只输出整理后的内容本身，保持原始表述，不要删改或扩写。
 2.  不要添加任何开场白、标题、总结、解释或结束语。
-3.  绝对不要提及或包含任何“不喜欢”列表中的内容。`;
+3.  绝对不要提及或包含任何"不喜欢"列表中的内容。`;
 
         } else if (mode === 'diverge') {
             const likesForInspiration = likes.length > 0 ? `### 创作的主要依据 (我喜欢的内容)\n- ${likes.join('\n- ')}\n` : '';
@@ -164,7 +166,7 @@ ${materials}
             const materials = [likesForInspiration, highlightsForInspiration, dislikesToAvoid].filter(Boolean).join('\n');
 
             prompt = `你是一个富有创意的灵感激发助手。
-请根据我“喜欢”和“高亮”的内容进行自由发散创作，但要确保内容与主题相关。
+请根据我"喜欢"和"高亮"的内容进行自由发散创作，但要确保内容与主题相关。
 
 ---
 ${materials}
@@ -172,7 +174,7 @@ ${materials}
 
 请开始你的创作。请注意：
 1.  你的创作应该富有想象力，但不能偏离主题。
-2.  在任何情况下，都绝对不能在你的回答中提及、暗示或包含任何“不喜欢”列表中的内容。`;
+2.  在任何情况下，都绝对不能在你的回答中提及、暗示或包含任何"不喜欢"列表中的内容。`;
         }
         return prompt.trim();
     }
@@ -250,9 +252,8 @@ ${materials}
         copyToast.style.top = `${event.clientY}px`;
         copyToast.style.visibility = 'visible';
         setTimeout(() => {
-            copyToast.style.display = 'none';
-            copyToast.style.visibility = 'visible';
-        }, 1200);
+            copyToast.style.visibility = 'hidden';
+        }, 1500);
     }
 
     function updateFollower() {
@@ -263,45 +264,26 @@ ${materials}
     }
 
     function onMouseMove(e) {
-        if (!isSelectionModeActive) return;
-        latestMouseX = e.pageX + 8;
-        latestMouseY = e.pageY + 8;
-        if (cursorFollower.style.display !== 'block') {
-            cursorFollower.style.display = 'block';
-        }
+        latestMouseX = e.clientX;
+        latestMouseY = e.clientY;
         if (!isTicking) {
-            requestAnimationFrame(updateFollower);
+            window.requestAnimationFrame(updateFollower);
             isTicking = true;
         }
     }
 
-    // Helper function to find the nearest block-level ancestor
     function getContainingBlock(node) {
-        // Traverses up to find the closest non-inline container.
-        // This helps identify the main 'block' an element belongs to.
-        while (node) {
-            if (node.nodeType === Node.ELEMENT_NODE) {
-                const display = window.getComputedStyle(node).display;
-                if (display !== 'inline' && display !== 'inline-block') {
-                    return node;
-                }
-            }
-            // Stop at the body to prevent infinite loops on detached nodes.
-            if (node.nodeName === 'BODY') {
-                return node;
-            }
-            node = node.parentNode;
+        if (!node) return null;
+        if (node.nodeType !== Node.ELEMENT_NODE) {
+            node = node.parentElement;
         }
-        return document.body; // Fallback
+        if (!node) return null;
+        return node.closest(CONTENT_ELEMENTS_SELECTOR);
     }
 
-    /**
-     * Cleans a DocumentFragment by removing any known Yummy UI elements.
-     * This prevents UI components like rating bars from being included in highlights.
-     * @param {DocumentFragment} fragment The fragment to clean.
-     */
     function cleanFragment(fragment) {
-        fragment.querySelectorAll('.yummy-rating-bar, .yummy-control-panel, #yummy-quick-highlight-button, #yummy-collection-panel').forEach(el => el.remove());
+        fragment.querySelectorAll('.yummy-rating-bar').forEach(el => el.remove());
+        return fragment;
     }
 
     function highlightSelection(range) {
@@ -319,57 +301,47 @@ ${materials}
 
         if (!isInMainContent || isInsideYummyUI) {
             if (selection.rangeCount > 0) selection.removeAllRanges();
+            logger.debug('Selection outside of main content or inside UI, ignoring.');
             return;
         }
 
         try {
-            // First, merge with any existing, intersecting highlights to create a single, expanded range.
             const mergedRange = mergeWithExistingHighlights(effectiveRange);
-
-            // Find all content blocks that intersect with our final range.
             const allBlocks = Array.from(document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR));
             const intersectingBlocks = allBlocks.filter(block =>
                 mergedRange.intersectsNode(block) &&
-                !block.classList.contains('yummy-selection-highlight') // Don't process highlights themselves
+                !block.classList.contains('yummy-selection-highlight')
             );
 
-            // If the selection is inside a single element that is not a designated content block
-            // (e.g. a plain div), we treat the containing block as the single element to process.
             if (intersectingBlocks.length === 0 && parentElement && mergedRange.intersectsNode(parentElement)) {
                 const singleBlock = getContainingBlock(parentElement);
                 if (singleBlock) intersectingBlocks.push(singleBlock);
             }
 
-            // Process each intersecting block individually.
             for (const block of intersectingBlocks) {
                 const blockRange = document.createRange();
                 blockRange.selectNodeContents(block);
 
-                // Create a new range that is the intersection of the mergedRange and the current block.
-                const intersectionRange = document.createRange();
                 const start = mergedRange.compareBoundaryPoints(Range.START_TO_START, blockRange) > 0 ? mergedRange.startContainer : blockRange.startContainer;
                 const startOffset = mergedRange.compareBoundaryPoints(Range.START_TO_START, blockRange) > 0 ? mergedRange.startOffset : blockRange.startOffset;
                 const end = mergedRange.compareBoundaryPoints(Range.END_TO_END, blockRange) < 0 ? mergedRange.endContainer : blockRange.endContainer;
                 const endOffset = mergedRange.compareBoundaryPoints(Range.END_TO_END, blockRange) < 0 ? mergedRange.endOffset : blockRange.endOffset;
 
+                const intersectionRange = document.createRange();
                 intersectionRange.setStart(start, startOffset);
                 intersectionRange.setEnd(end, endOffset);
 
-                // If the intersection is not collapsed, highlight it.
                 if (!intersectionRange.collapsed) {
                     const highlightSpan = document.createElement('span');
                     highlightSpan.className = 'yummy-selection-highlight';
+                    highlightSpan.addEventListener('click', () => unhighlightElement(highlightSpan));
 
                     const selectedContents = intersectionRange.extractContents();
-
-                    // CRITICAL: Clean the fragment before appending to prevent UI inclusion.
                     cleanFragment(selectedContents);
-
                     highlightSpan.appendChild(selectedContents);
                     intersectionRange.insertNode(highlightSpan);
                 }
             }
-
         } catch (e) {
             logger.warn('无法包裹所选内容。这可能是由于复杂的页面结构造成的。', e);
         } finally {
@@ -379,21 +351,21 @@ ${materials}
 
     function mergeWithExistingHighlights(newRange) {
         const highlights = document.querySelectorAll('.yummy-selection-highlight');
-        const intersectingHighlights = Array.from(highlights).filter(h => newRange.intersectsNode(h) && h.parentNode);
-        if (intersectingHighlights.length === 0) return newRange;
-        const mergedRange = newRange.cloneRange();
-        intersectingHighlights.forEach(highlight => {
+        highlights.forEach(highlight => {
             const highlightRange = document.createRange();
-            highlightRange.selectNode(highlight);
-            if (highlightRange.compareBoundaryPoints(Range.START_TO_START, mergedRange) < 0) {
-                mergedRange.setStart(highlightRange.startContainer, highlightRange.startOffset);
-            }
-            if (highlightRange.compareBoundaryPoints(Range.END_TO_END, mergedRange) > 0) {
-                mergedRange.setEnd(highlightRange.endContainer, highlightRange.endOffset);
+            highlightRange.selectNodeContents(highlight);
+
+            if (newRange.intersectsNode(highlight)) {
+                if (newRange.compareBoundaryPoints(Range.START_TO_START, highlightRange) > 0) {
+                    newRange.setStart(highlightRange.startContainer, highlightRange.startOffset);
+                }
+                if (newRange.compareBoundaryPoints(Range.END_TO_END, highlightRange) < 0) {
+                    newRange.setEnd(highlightRange.endContainer, highlightRange.endOffset);
+                }
+                unhighlightElement(highlight);
             }
         });
-        intersectingHighlights.forEach(unhighlightElement);
-        return mergedRange;
+        return newRange;
     }
 
     function unhighlightElement(element) {
@@ -403,7 +375,8 @@ ${materials}
             parent.insertBefore(element.firstChild, element);
         }
         parent.removeChild(element);
-        parent.normalize();
+        parent.normalize(); // Merge adjacent text nodes
+        logger.info('高亮已移除。');
     }
 
     function handleTextSelection(event) {
@@ -411,32 +384,124 @@ ${materials}
             highlightSelection();
             return;
         }
+
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+            if (quickHighlightButton) quickHighlightButton.style.display = 'none';
+            return;
+        }
+
+        const range = selection.getRangeAt(0);
+        const parentElement = range.commonAncestorContainer.parentElement;
+        if (!parentElement.closest('main') || parentElement.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-collection-panel, #yummy-quick-highlight-button')) {
+            if (quickHighlightButton) quickHighlightButton.style.display = 'none';
+            return;
+        }
+
+        lastSelectionRange = range.cloneRange();
+        const rect = range.getBoundingClientRect();
+        quickHighlightButton.style.display = 'flex';
+        quickHighlightButton.style.left = `${rect.right + 5}px`;
+        quickHighlightButton.style.top = `${rect.bottom + 5}px`;
+    }
+
+    function closeActiveContextMenu() {
+        if (activeContextMenu) {
+            activeContextMenu.remove();
+            activeContextMenu = null;
+        }
+    }
+
+    function showContextMenu(event, item) {
+        event.preventDefault();
+        closeActiveContextMenu();
+
+        const menu = document.createElement('div');
+        menu.className = 'yummy-context-menu';
+
+        const performCopy = () => {
+            const textToCopy = item.textContent || '';
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                showToast('已复制!', event);
+                item.classList.add('copied');
+                setTimeout(() => item.classList.remove('copied'), 1000);
+            }).catch(err => {
+                logger.error('复制失败', err);
+                showToast('复制失败!', event);
+            });
+        };
+
+        const starOption = document.createElement('div');
+        starOption.className = 'yummy-context-menu-item';
+        const isStarred = item.classList.contains('starred');
+        starOption.innerHTML = `<span>${isStarred ? '🌟' : '⭐'}</span> ${isStarred ? '取消星标' : '添加星标'}`;
+        starOption.addEventListener('click', () => {
+            item.classList.toggle('starred');
+            closeActiveContextMenu();
+        });
+        menu.appendChild(starOption);
+
+        const copyOption = document.createElement('div');
+        copyOption.className = 'yummy-context-menu-item';
+        copyOption.innerHTML = '<span>📋</span> 复制内容';
+        copyOption.addEventListener('click', () => {
+            performCopy();
+            closeActiveContextMenu();
+        });
+        menu.appendChild(copyOption);
+
+        const deleteOption = document.createElement('div');
+        deleteOption.className = 'yummy-context-menu-item danger';
+        deleteOption.innerHTML = '<span>🗑️</span> 删除条目';
+        deleteOption.addEventListener('click', () => {
+            item.remove();
+            closeActiveContextMenu();
+        });
+        menu.appendChild(deleteOption);
+
+        document.body.appendChild(menu);
+        activeContextMenu = menu;
+
+        const {
+            clientX: mouseX,
+            clientY: mouseY
+        } = event;
+        const {
+            offsetWidth: menuWidth,
+            offsetHeight: menuHeight
+        } = menu;
+        const {
+            innerWidth: winWidth,
+            innerHeight: winHeight
+        } = window;
+
+        let x = mouseX;
+        let y = mouseY;
+        if (mouseX + menuWidth > winWidth) {
+            x = winWidth - menuWidth - 5;
+        }
+        if (mouseY + menuHeight > winHeight) {
+            y = winHeight - menuHeight - 5;
+        }
+        menu.style.top = `${y}px`;
+        menu.style.left = `${x}px`;
+
+        const outsideClickListener = (e) => {
+            if (!menu.contains(e.target)) {
+                closeActiveContextMenu();
+                document.removeEventListener('click', outsideClickListener);
+                document.removeEventListener('contextmenu', outsideClickListener);
+            }
+        };
         setTimeout(() => {
-            const selection = window.getSelection();
-            if (selection.isCollapsed || !quickHighlightButton) {
-                quickHighlightButton.style.display = 'none';
-                lastSelectionRange = null;
-                return;
-            }
-            const range = selection.getRangeAt(0);
-            const parentElement = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
-            const isInMainContent = parentElement.closest('main');
-            const isInsideYummyUI = parentElement.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-quick-highlight-button, #yummy-collection-panel');
-            if (!isInMainContent || isInsideYummyUI) {
-                quickHighlightButton.style.display = 'none';
-                lastSelectionRange = null;
-                return;
-            }
-            lastSelectionRange = range;
-            quickHighlightButton.style.display = 'flex';
-            quickHighlightButton.style.left = `${event.pageX + 5}px`;
-            quickHighlightButton.style.top = `${event.pageY + 5}px`;
-        }, 10);
+            document.addEventListener('click', outsideClickListener);
+            document.addEventListener('contextmenu', outsideClickListener);
+        }, 0);
     }
 
     function collectHighlights() {
         if (!collectionContent) return;
-        collectionContent.innerHTML = ''; // Clear previous
+        collectionContent.innerHTML = ''; // 清空现有列表
 
         const uniqueContent = new Set();
 
@@ -452,9 +517,22 @@ ${materials}
             if (text) uniqueContent.add(text);
         });
 
-        uniqueContent.forEach(text => {
-            if (text) addItemToCollection(text);
-        });
+        if (uniqueContent.size > 0) {
+            uniqueContent.forEach(text => {
+                if (text) addItemToCollection(text);
+            });
+            logger.info(`${uniqueContent.size}个条目已收集。`);
+            showToast(`${uniqueContent.size}个条目已收集`, {
+                clientX: window.innerWidth - 250,
+                clientY: 50
+            });
+        } else {
+            logger.info('没有找到可供收集的内容。');
+            showToast('未找到"喜欢"或高亮内容', {
+                clientX: window.innerWidth - 250,
+                clientY: 50
+            });
+        }
     }
 
     function addItemToCollection(text) {
@@ -462,22 +540,27 @@ ${materials}
         const item = document.createElement('div');
         item.className = 'yummy-collection-item';
         item.textContent = text;
-        item.dataset.rawText = text;
-        const copyIcon = document.createElement('span');
-        copyIcon.className = 'yummy-collection-item-copy-icon';
-        copyIcon.textContent = '📋';
-        copyIcon.title = '复制此项';
-        item.appendChild(copyIcon);
-        const performCopy = (event) => {
-            event.stopPropagation();
-            navigator.clipboard.writeText(text).then(() => {
+        item.title = '左键单击可复制，右键单击可打开菜单';
+
+        item.addEventListener('click', (event) => {
+            event.stopPropagation(); // 阻止事件冒泡，这很关键
+            const textToCopy = item.textContent || '';
+            navigator.clipboard.writeText(textToCopy).then(() => {
                 showToast('已复制!', event);
                 item.classList.add('copied');
-                setTimeout(() => item.classList.remove('copied'), 300);
-            }).catch(err => logger.error('复制失败', err));
-        };
-        item.addEventListener('click', performCopy);
+                setTimeout(() => item.classList.remove('copied'), 1000);
+            }).catch(err => {
+                logger.error('复制失败', err);
+                showToast('复制失败!', event);
+            });
+        });
+
+        item.addEventListener('contextmenu', (e) => {
+            showContextMenu(e, item);
+        });
+
         collectionContent.appendChild(item);
+        collectionContent.scrollTop = collectionContent.scrollHeight;
     }
 
     function quickExitSelectionMode(event) {
@@ -487,56 +570,48 @@ ${materials}
         }
     }
 
-    function showCollectionPanel(visible) {
-        if (!collectionPanel) return;
-        if (visible) {
-            collectionPanel.classList.add('visible');
-        } else if (!isCollectionPanelPinned) {
-            collectionPanel.classList.remove('visible');
-        }
-    }
-
-    // --- UI Creation ---
     function createUiElements() {
-        // Control Panel
-        const panel = document.createElement('div');
-        panel.className = 'yummy-control-panel';
+        // --- Panels & Buttons ---
+        const controlPanel = document.createElement('div');
+        controlPanel.className = 'yummy-control-panel';
 
-        const toggleButton = document.createElement('div');
-        toggleButton.className = 'yummy-control-button';
-        toggleButton.title = '切换划词高亮模式';
-        toggleButton.textContent = '😋';
-        toggleButton.addEventListener('click', () => {
-            isSelectionModeActive = !isSelectionModeActive;
-            toggleButton.classList.toggle('active', isSelectionModeActive);
-            document.body.classList.toggle('yummy-selection-mode-active', isSelectionModeActive);
-            if (!isSelectionModeActive && cursorFollower) cursorFollower.style.display = 'none';
-        });
+        const selectionModeButton = document.createElement('button');
+        selectionModeButton.id = 'yummy-selection-mode-toggle';
+        selectionModeButton.className = 'yummy-control-button';
+        selectionModeButton.innerHTML = '✒️';
+        selectionModeButton.title = '开启/关闭划词模式 (按Esc可快速退出)';
 
-        const collectButton = document.createElement('div');
+        const collectionToggleButton = document.createElement('button');
+        collectionToggleButton.id = 'yummy-collection-toggle';
+        collectionToggleButton.className = 'yummy-control-button';
+        collectionToggleButton.innerHTML = '📚';
+        collectionToggleButton.title = '打开/关闭收集面板';
+
+        const collectButton = document.createElement('button');
+        collectButton.id = 'yummy-collect-button';
         collectButton.className = 'yummy-control-button';
-        collectButton.title = '收集精华内容';
-        collectButton.textContent = '📥';
-        collectButton.addEventListener('click', () => {
-            collectHighlights();
-            showCollectionPanel(true);
-        });
+        collectButton.innerHTML = '📥';
+        collectButton.title = '收集所有"喜欢"和高亮的内容';
 
-        const organizeBtn = document.createElement('div');
+        const separator1 = document.createElement('hr');
+
+        const organizeBtn = document.createElement('button');
         organizeBtn.className = 'yummy-control-button';
         organizeBtn.id = 'yummy-organize-btn';
         organizeBtn.textContent = '📝';
         organizeBtn.title = '整理模式: 严谨地整理您标记的内容，不进行任何扩写。';
         organizeBtn.addEventListener('click', () => generateAndApplyPrompt('organize'));
 
-        const divergeBtn = document.createElement('div');
+        const divergeBtn = document.createElement('button');
         divergeBtn.className = 'yummy-control-button';
         divergeBtn.id = 'yummy-diverge-btn';
         divergeBtn.textContent = '✨';
         divergeBtn.title = '发散模式: 基于您标记的内容进行创意发挥。';
         divergeBtn.addEventListener('click', () => generateAndApplyPrompt('diverge'));
 
-        const autoSendBtn = document.createElement('div');
+        const separator2 = document.createElement('hr');
+
+        const autoSendBtn = document.createElement('button');
         autoSendBtn.className = 'yummy-control-button active';
         autoSendBtn.id = 'yummy-autosend-btn';
         autoSendBtn.textContent = '🚀';
@@ -547,140 +622,175 @@ ${materials}
             autoSendBtn.title = isAutoSendActive ? '自动发送已开启，点击关闭' : '自动发送已关闭，点击开启';
         });
 
-        panel.appendChild(toggleButton);
-        panel.appendChild(collectButton);
-        panel.appendChild(document.createElement('hr'));
-        panel.appendChild(organizeBtn);
-        panel.appendChild(divergeBtn);
-        panel.appendChild(autoSendBtn);
-        document.body.appendChild(panel);
 
-        // Cursor Follower
-        if (!document.getElementById('yummy-cursor-follower')) {
-            cursorFollower = document.createElement('div');
-            cursorFollower.id = 'yummy-cursor-follower';
-            cursorFollower.textContent = '😋';
-            document.body.appendChild(cursorFollower);
-        }
-        // Quick Highlight Button
-        if (!document.getElementById('yummy-quick-highlight-button')) {
-            quickHighlightButton = document.createElement('div');
-            quickHighlightButton.id = 'yummy-quick-highlight-button';
-            quickHighlightButton.textContent = '😋';
-            quickHighlightButton.title = '高亮选中内容';
-            quickHighlightButton.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (lastSelectionRange) {
-                    highlightSelection(lastSelectionRange);
-                    lastSelectionRange = null;
+        controlPanel.appendChild(selectionModeButton);
+        controlPanel.appendChild(collectionToggleButton);
+        controlPanel.appendChild(collectButton);
+        controlPanel.appendChild(separator1);
+        controlPanel.appendChild(organizeBtn);
+        controlPanel.appendChild(divergeBtn);
+        controlPanel.appendChild(separator2);
+        controlPanel.appendChild(autoSendBtn);
+        document.body.appendChild(controlPanel);
+
+        collectionPanel = document.createElement('div');
+        collectionPanel.id = 'yummy-collection-panel';
+
+        const collectionHeader = document.createElement('div');
+        collectionHeader.id = 'yummy-collection-header';
+
+        const collectionPinBtn = document.createElement('span');
+        collectionPinBtn.id = 'yummy-collection-pin-btn';
+        collectionPinBtn.textContent = '📌';
+        collectionPinBtn.title = '钉住面板';
+
+        const collectionHeaderText = document.createElement('span');
+        collectionHeaderText.textContent = '📋 Yummy 收集面板';
+        collectionHeader.title = '点击复制所有收集到的内容';
+
+        const collectionClearBtn = document.createElement('span');
+        collectionClearBtn.id = 'yummy-collection-clear-btn';
+        collectionClearBtn.textContent = '🚮';
+        collectionClearBtn.title = '清空所有条目';
+
+        collectionHeader.appendChild(collectionPinBtn);
+        collectionHeader.appendChild(collectionHeaderText);
+        collectionHeader.appendChild(collectionClearBtn);
+        collectionPanel.appendChild(collectionHeader);
+
+        collectionContent = document.createElement('div');
+        collectionContent.id = 'yummy-collection-content';
+        collectionPanel.appendChild(collectionContent);
+        document.body.appendChild(collectionPanel);
+
+        // --- Event Listeners ---
+        selectionModeButton.addEventListener('click', () => {
+            isSelectionModeActive = !isSelectionModeActive;
+            selectionModeButton.classList.toggle('active', isSelectionModeActive);
+            document.body.classList.toggle('yummy-selection-mode-active', isSelectionModeActive);
+            cursorFollower.style.display = isSelectionModeActive ? 'block' : 'none';
+            logger.info('划词模式已' + (isSelectionModeActive ? '开启' : '关闭'));
+        });
+
+        collectionToggleButton.addEventListener('click', () => {
+            collectionPanel.classList.toggle('visible');
+        });
+
+        collectButton.addEventListener('click', () => {
+            collectHighlights();
+            collectionPanel.classList.add('visible');
+        });
+
+        collectionPinBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            isCollectionPanelPinned = !isCollectionPanelPinned;
+            collectionPinBtn.classList.toggle('pinned', isCollectionPanelPinned);
+            collectionPinBtn.title = isCollectionPanelPinned ? '取消钉住' : '钉住面板';
+        });
+
+        collectionClearBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (collectionContent) {
+                if (collectionContent.innerHTML === '') {
+                    showToast('面板已经空了', e);
+                    return;
                 }
-                quickHighlightButton.style.display = 'none';
+                collectionContent.innerHTML = '';
+                logger.info('收集面板已清空。');
+                showToast('面板已清空', e);
+            }
+        });
+
+        collectionHeader.addEventListener('click', (e) => {
+            if (collectionPinBtn.contains(e.target) || collectionClearBtn.contains(e.target)) return;
+            const allText = Array.from(collectionContent.children)
+                .map(item => item.textContent)
+                .join('\n\n---\n\n');
+            if (!allText) {
+                showToast('面板是空的', e);
+                return;
+            }
+            navigator.clipboard.writeText(allText).then(() => {
+                const originalText = collectionHeaderText.textContent;
+                collectionHeaderText.textContent = '✅ 已全部复制!';
+                setTimeout(() => {
+                    collectionHeaderText.textContent = originalText;
+                }, 1500);
+            }).catch(err => {
+                logger.error('一键复制全部失败', err);
+                showToast('复制失败', e);
             });
-            document.body.appendChild(quickHighlightButton);
-        }
+        });
+
+        // Auto-hide logic
+        collectionPanel.addEventListener('mouseenter', () => {
+            if (collectionHideTimer) {
+                clearTimeout(collectionHideTimer);
+                collectionHideTimer = null;
+            }
+        });
+
+        collectionPanel.addEventListener('mouseleave', () => {
+            // Check if context menu is active before hiding
+            if (!isCollectionPanelPinned && !activeContextMenu) {
+                collectionHideTimer = setTimeout(() => {
+                    collectionPanel.classList.remove('visible');
+                }, 300);
+            }
+        });
+
+        // Quick hide button
+        quickHighlightButton = document.createElement('div');
+        quickHighlightButton.id = 'yummy-quick-highlight-button';
+        quickHighlightButton.textContent = EMOJI_LIKE;
+        quickHighlightButton.title = '高亮选中内容';
+        document.body.appendChild(quickHighlightButton);
+        quickHighlightButton.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            highlightSelection(lastSelectionRange);
+            quickHighlightButton.style.display = 'none';
+        });
+
+        // Cursor follower
+        cursorFollower = document.createElement('div');
+        cursorFollower.id = 'yummy-cursor-follower';
+        cursorFollower.textContent = '✒️';
+        document.body.appendChild(cursorFollower);
+
         // Copy Toast
-        if (!document.getElementById('yummy-copy-toast')) {
-            copyToast = document.createElement('div');
-            copyToast.id = 'yummy-copy-toast';
-            document.body.appendChild(copyToast);
-        }
-        // Collection Panel
-        if (!document.getElementById('yummy-collection-panel')) {
-            collectionPanel = document.createElement('div');
-            collectionPanel.id = 'yummy-collection-panel';
-            const header = document.createElement('div');
-            header.id = 'yummy-collection-header';
-
-            const pinBtn = document.createElement('span');
-            pinBtn.id = 'yummy-collection-pin-btn';
-            pinBtn.textContent = '📌';
-            pinBtn.title = '钉住面板';
-            pinBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                isCollectionPanelPinned = !isCollectionPanelPinned;
-                pinBtn.classList.toggle('pinned', isCollectionPanelPinned);
-                pinBtn.title = isCollectionPanelPinned ? '取消钉住' : '钉住面板';
-            });
-
-            const headerText = document.createElement('span');
-            headerText.textContent = '复制全部';
-            header.title = '复制所有收集到的内容';
-
-            header.appendChild(pinBtn);
-            header.appendChild(headerText);
-
-            header.addEventListener('click', (e) => {
-                if (e.target === pinBtn || pinBtn.contains(e.target)) return;
-                const allText = Array.from(collectionContent.children)
-                    .map(item => item.dataset.rawText)
-                    .join('\n\n---\n\n');
-                if (!allText) return;
-                navigator.clipboard.writeText(allText).then(() => {
-                    // showToast('已复制全部内容!', e); // Per user request, toast is removed.
-                    const originalText = headerText.textContent;
-                    headerText.textContent = '✅ 已复制!';
-                    setTimeout(() => {
-                        headerText.textContent = originalText;
-                    }, 1500);
-                });
-            });
-
-            collectionContent = document.createElement('div');
-            collectionContent.id = 'yummy-collection-content';
-            collectionPanel.appendChild(header);
-            collectionPanel.appendChild(collectionContent);
-            document.body.appendChild(collectionPanel);
-
-            // Hide logic
-            collectionPanel.addEventListener('mouseenter', () => clearTimeout(collectionHideTimer));
-            collectionPanel.addEventListener('mouseleave', () => {
-                if (isCollectionPanelPinned) return;
-                collectionHideTimer = setTimeout(() => showCollectionPanel(false), 1000);
-            });
-        }
+        copyToast = document.createElement('div');
+        copyToast.id = 'yummy-copy-toast';
+        document.body.appendChild(copyToast);
     }
 
-    // --- Initialization ---
     function initializeFeatures() {
         createUiElements();
         document.addEventListener('mouseup', handleTextSelection);
-        document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('keydown', quickExitSelectionMode);
+        document.addEventListener('mousemove', onMouseMove);
 
-        // Global click listener for un-highlighting and hiding panel
-        document.addEventListener('click', (e) => {
-            // Logic to un-highlight when a highlight is clicked
-            const highlight = e.target.closest('.yummy-selection-highlight');
-            if (highlight) {
-                e.preventDefault();
-                e.stopPropagation();
-                unhighlightElement(highlight);
-                return; // Stop further processing to avoid side-effects
+        // Hide quick highlight button on scroll or click
+        document.addEventListener('scroll', () => {
+            if (quickHighlightButton) quickHighlightButton.style.display = 'none';
+        });
+        document.addEventListener('mousedown', (e) => {
+            if (quickHighlightButton && e.target !== quickHighlightButton) {
+                quickHighlightButton.style.display = 'none';
             }
-
-            // Logic to hide collection panel on outside click
-            if (isCollectionPanelPinned) return;
-            if (collectionPanel && collectionPanel.classList.contains('visible') && !collectionPanel.contains(e.target) && !e.target.closest('.yummy-control-panel')) {
-                showCollectionPanel(false);
-            }
-        }, true); // Use capturing phase to catch the click early
-
-        logger.info('选择模式、收集器和提示词生成器已初始化。');
+        });
     }
 
     initializeFeatures();
 
 })();
 
-
 function initializeYummy() {
-    logger.info('Yummy! 初始化...');
     observer.observe(document.body, {
         childList: true,
         subtree: true
     });
-    processNewElements(); // Initial run
-    logger.info('Yummy! 初始化完成。');
+    logger.info("Yummy 观察者已启动。");
 }
 
 initializeYummy();
