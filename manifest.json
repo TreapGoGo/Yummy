@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "Yummy!",
-    "version": "0.4",
-    "description": "精细取舍",
+    "version": "0.4.3",
+    "description": "为 ChatGPT 的每个段落添加 😋/🤮 评价，并高亮显示。",
     "content_scripts": [
         {
             "matches": [

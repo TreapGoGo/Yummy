@@ -1,3 +1,24 @@
+// Check if the extension is running in development mode.
+// An extension loaded unpacked for development won't have an 'update_url' in its manifest.
+const isDevMode = !('update_url' in chrome.runtime.getManifest());
+
+if (!isDevMode) {
+    // If this is a production version (e.g., from the web store), we disable the logger.
+    // We replace the global logger object with a dummy that has the same methods,
+    // but they all do nothing. This effectively prevents any console messages
+    // and stops the logger UI panel from ever being created.
+    window.logger = {
+        log: () => { },
+        info: () => { },
+        warn: () => { },
+        error: () => { },
+        debug: () => { },
+        group: () => { },
+        groupEnd: () => { },
+        init: () => { } // Ensure init is also a no-op if it exists
+    };
+}
+
 logger.info('Yummy! 内容脚本已加载。');
 
 const EMOJI_LIKE = '😋';
