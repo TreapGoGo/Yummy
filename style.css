@@ -1,32 +1,82 @@
+/*
+  Yummy! 样式表 (v0.4.4)
+
+  本样式表定义了 Yummy! 扩展注入到 ChatGPT 页面的所有UI元素的视觉表现。
+  其核心设计哲学是：
+  1.  **最小侵入**：尽可能不破坏 ChatGPT 的原始布局和样式。
+  2.  **视觉反馈**：通过颜色、过渡动画和悬停效果，为用户的每一个操作提供清晰、即时的反馈。
+  3.  **响应式交互**：UI 元素（如评价栏）应在需要时出现，在不需要时隐藏，保持界面整洁。
+*/
+
+/* 
+  段落容器 (.yummy-paragraph-container)
+  这是由 content.js 动态创建的、用于包裹每一个可评价内容块（如 <p>, <h1>, <li> 等）的 <div> 容器。
+  它的主要作用有两个：
+  1.  **提供悬停目标**：下面的 `:hover` 规则利用这个容器来触发其内部评价栏的显示。
+  2.  **提供定位上下文**：虽然在 v0.4.4 版本中其 position 是 static，导致评价栏实际上是相对于更大的父容器定位，
+      但在逻辑上，它本应是评价栏的直接定位锚点。这是后续版本可能需要优化的点。
+*/
 .yummy-paragraph-container {
     position: static;
 }
 
+/*
+  评价栏 (.yummy-rating-bar)
+  这是包含"喜欢"和"不喜欢"按钮的核心UI。
+*/
 .yummy-rating-bar {
+    /* 
+      关键定位：通过绝对定位，将评价栏从正常的文档流中脱离，使其可以"悬浮"在页面上。
+      它会相对于最近的、非 static 定位的祖先元素进行定位。
+    */
     position: absolute;
+    /* 
+      水平定位：-85px 是一个精心选择的"魔术数字"，目的是让评价栏正好出现在
+      ChatGPT 对话气泡左侧的空白区域，既不遮挡文本，又方便鼠标触及。
+    */
     left: -85px;
     width: 80px;
+
+    /* 使用 Flexbox 布局，确保内部的两个按钮能水平、居中排列 */
     display: flex;
     flex-direction: row;
     justify-content: center;
     align-items: center;
     gap: 4px;
+
+    /* 
+      默认隐藏与平滑过渡：
+      默认状态下评价栏完全透明（不可见）。当其透明度变化时（见下面的:hover规则），
+      这个过程会在 0.2 秒内平滑完成，而不是生硬地闪现/消失。
+    */
     opacity: 0;
     transition: opacity 0.2s ease-in-out;
     padding: 2px 0;
 }
 
+/*
+  核心交互逻辑：当鼠标悬停在段落容器上时，其内部的评价栏变为不透明（可见）。
+*/
 .yummy-paragraph-container:hover .yummy-rating-bar {
     opacity: 1;
 }
 
+/*
+  评价按钮 (.yummy-rating-button)
+  定义了 😋 和 🤮 这两个按钮的通用样式。
+*/
 .yummy-rating-button {
     cursor: pointer;
     font-size: 16px;
     padding: 2px;
     border-radius: 4px;
+    /* 轻微的放大动画，提供动态反馈 */
     transition: transform 0.1s ease-in-out;
     line-height: 1;
+    /* 
+      禁止选中文本：防止用户在点击时意外选中 Emoji 字符，
+      确保其交互行为更像一个真正的"按钮"。
+    */
     -webkit-user-select: none;
     /* Safari */
     -ms-user-select: none;
@@ -39,8 +89,12 @@
     transform: scale(1.2);
 }
 
+/*
+  闪烁动画 (@keyframes yummy-flash-background)
+  这是一个独立的动画效果，用于在需要时（如对标题进行初次评级）给予用户非侵入式的视觉提示。
+  动画过程为：背景从透明 -> 半透明灰色 -> 透明。
+*/
 @keyframes yummy-flash-background {
-
     0%,
     100% {
         background-color: transparent;
@@ -52,11 +106,24 @@
     }
 }
 
+/*
+  闪烁效果应用类 (.yummy-flash)
+  任何被 JS 动态添加了这个类的元素，都会播放上面的闪烁动画。
+*/
 .yummy-flash {
     animation: yummy-flash-background 0.5s ease-in-out;
 }
 
+/*
+  评价状态高亮 (.yummy-liked, .yummy-disliked)
+  这是用户评价后最主要的视觉反馈。
+*/
 .yummy-liked {
+    /* 
+      使用带透明度的 RGBA 颜色，而不是不透明的 HEX 颜色，
+      可以让高亮效果更柔和，隐约透出底层的页面结构。
+      !important 用于确保我们的样式能覆盖 ChatGPT 的默认样式。
+    */
     background-color: rgba(221, 247, 221, 0.8) !important;
 }
 
@@ -64,6 +131,12 @@
     background-color: rgba(255, 221, 221, 0.8) !important;
 }
 
+/*
+  嵌套列表处理：这是一个针对特殊场景的防御性规则。
+  当一个已经被高亮的元素（如 <li>）内部又包含一个列表（<ul> 或 <ol>）时，
+  为了避免高亮背景色在子列表上重复叠加导致颜色过深，
+  这条规则会强制将子列表的背景设回白色，保证可读性。
+*/
 .yummy-liked>ul,
 .yummy-liked>ol,
 .yummy-disliked>ul,
@@ -72,6 +145,11 @@
 }
 
 /* --- Control Panel --- */
+/* 
+  右侧控制面板 (.yummy-control-panel)
+  这是一个固定在屏幕右侧的悬浮面板，作为所有全局操作按钮的容器。
+  它的显隐和折叠都依赖于 class 的切换和 CSS transition 动画。
+*/
 .yummy-control-panel {
     position: fixed;
     top: 50%;
@@ -128,6 +206,11 @@
 }
 
 /* --- Selection Highlight & Popups --- */
+/* 
+  划词高亮样式 (.yummy-selection-highlight)
+  这是通过 JS 将用户选中的文本用 <span> 包裹后，应用给这个 <span> 的样式。
+  黄底黑字是最传统、最醒目的高亮方案。
+*/
 .yummy-selection-highlight {
     background-color: yellow !important;
     color: black !important;

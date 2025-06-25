@@ -1,12 +1,30 @@
-// Check if the extension is running in development mode.
-// An extension loaded unpacked for development won't have an 'update_url' in its manifest.
+/*
+  Yummy! 内容脚本 (v0.4.4)
+
+  这是 Yummy! 扩展的核心脚本，负责向 ChatGPT 页面注入所有交互功能。
+  其主要功能模块包括：
+  1.  **评价栏注入**：为 AI 回复的每个内容块（段落、标题、列表项等）动态添加"喜欢/不喜欢"的评价工具。
+  2.  **分级评价系统**：为标题（父级元素）实现一种复杂的、两级的评价逻辑。
+  3.  **划词高亮系统**：提供一个独立的"划词模式"，并支持在普通模式下通过快捷按钮进行高亮。
+  4.  **UI面板与交互**：创建并管理右侧的控制面板和左侧的收集面板。
+  5.  **提示词生成**：根据用户标记的内容，智能地生成可用于后续提问的提示词。
+
+  此脚本通过 MutationObserver 监听页面的动态变化，确保功能对流式输出的内容同样有效。
+*/
+
+
+// --- 初始化与环境检查 ---
+
+// 通过检查 `update_url` (一个只在发布版 manifest.json 中存在的字段) 来判断扩展是否处于本地解压的开发模式。
+// 这是一个非常巧妙且无侵入性的环境判断方法。
 const isDevMode = !('update_url' in chrome.runtime.getManifest());
 
 if (!isDevMode) {
-    // If this is a production version (e.g., from the web store), we disable the logger.
-    // We replace the global logger object with a dummy that has the same methods,
-    // but they all do nothing. This effectively prevents any console messages
-    // and stops the logger UI panel from ever being created.
+    // 如果是生产环境（例如从 Chrome 网上应用店安装），则用一个"空壳"对象替换全局的 logger。
+    // 这个"空壳"对象拥有与真实 logger 完全相同的接口（方法名），但所有方法都是空函数，什么也不做。
+    // 这样做的好处是：
+    // 1.  **性能优化**：在生产环境中，所有日志记录相关的开销（包括创建日志面板的DOM操作）都被完全移除。
+    // 2.  **代码整洁**：业务逻辑代码中无需遍布 `if (isDevMode)` 的检查，可以直接调用 logger 的方法，实现了开发与生产的无缝切换。
     window.logger = {
         log: () => { },
         info: () => { },
@@ -15,7 +33,7 @@ if (!isDevMode) {
         debug: () => { },
         group: () => { },
         groupEnd: () => { },
-        init: () => { } // Ensure init is also a no-op if it exists
+        init: () => { }
     };
 }
 
@@ -24,12 +42,23 @@ logger.info('Yummy! 内容脚本已加载。');
 const EMOJI_LIKE = '😋';
 const EMOJI_DISLIKE = '🤮';
 
-// --- Feature 1: Rating Bars ---
+// --- 功能模块 1: 评价栏系统 ---
+
+/**
+ * 为目标元素及其所有后代文本节点应用"喜欢"或"不喜欢"的状态。
+ * @param {HTMLElement} targetElement - 需要应用状态的顶层元素。
+ * @param {'liked' | 'disliked' | 'none'} state - 需要应用的状态。
+ */
 function applyHierarchicalState(targetElement, state) {
+    // 定义需要被统一应用状态的后代元素选择器。
     const descendantSelector = 'p, h1, h2, h3, h4, h5, h6, li';
+    // 首先清理目标元素自身可能存在的旧状态。
     targetElement.classList.remove('yummy-liked', 'yummy-disliked');
+    // 然后清理其所有后代元素可能存在的旧状态。
     const descendants = targetElement.querySelectorAll(descendantSelector);
     descendants.forEach(d => d.classList.remove('yummy-liked', 'yummy-disliked'));
+
+    // 根据新状态，为目标元素及其所有后代添加对应的 CSS 类。
     if (state === 'liked') {
         targetElement.classList.add('yummy-liked');
         descendants.forEach(d => d.classList.add('yummy-liked'));
@@ -40,15 +69,36 @@ function applyHierarchicalState(targetElement, state) {
     logger.debug(`已将状态 '${state}' 应用到元素及其子项。`, targetElement);
 }
 
+/**
+ * 为指定的页面元素动态创建并注入一个评价栏。
+ * 这是整个评价功能的核心入口。
+ * @param {HTMLElement} element - 需要添加评价栏的原始页面元素 (如 <p>, <h1>)。
+ */
 function addRatingBar(element) {
+    // 防御性检查：通过在元素上设置一个自定义数据属性 `data-yummy-processed` 作为标记，
+    // 防止同一个元素被重复处理，这在 MutationObserver 的回调中尤为重要。
     if (element.dataset.yummyProcessed) return;
     element.dataset.yummyProcessed = 'true';
+
+    // **核心设计：包裹容器 (Wrapper Div)**
+    // 创建一个 <div> 容器，并将原始的 `element` 包裹进去。
+    // 这个容器是实现交互的关键，其目的在 style.css 中有详细解释。
+    // v0.4.4 版本中，这个包裹逻辑是所有列表（<li>）排版问题的根源，因为它没有考虑到
+    // <li> 元素的父子结构约束，即 <ul> 的直接子元素不能是 <div>。
     const container = document.createElement('div');
     container.className = 'yummy-paragraph-container';
     element.parentNode.insertBefore(container, element);
     container.appendChild(element);
+
     const ratingBar = document.createElement('div');
     ratingBar.className = 'yummy-rating-bar';
+
+    // **精妙的对齐修正**
+    // 默认情况下，评价栏的 top 会是0，这会导致它与各自元素的顶部对齐，在视觉上参差不齐。
+    // 这段代码通过计算元素相对于整个对话轮次容器（'.group/conversation-turn'）的顶部偏移，
+    // 来动态设置评价栏的 `top` 样式。
+    // 这确保了在同一个对话轮次中，所有评价栏都能与它们各自内容的第一行文本精准对齐，
+    // 形成一条干净的垂直线，极大地提升了视觉体验。
     const turnContainer = element.closest('.group\\/conversation-turn');
     if (turnContainer) {
         const elementRect = element.getBoundingClientRect();
@@ -56,20 +106,26 @@ function addRatingBar(element) {
         const top = elementRect.top - turnRect.top;
         ratingBar.style.top = `${top}px`;
     }
+
     const likeButton = document.createElement('span');
     likeButton.className = 'yummy-rating-button';
     likeButton.textContent = EMOJI_LIKE;
     likeButton.title = '想吃 (Like)';
     likeButton.addEventListener('click', (e) => {
+        // 阻止事件冒泡，防止意外触发更上层元素的点击事件。
         e.stopPropagation();
+        // 判断当前元素是否为标题（父级元素）。
         const isParent = /H[1-6]/.test(element.tagName);
         if (isParent) {
+            // 如果是标题，则走复杂的分级评价逻辑。
             handleParentRating(element, 'liked');
         } else {
+            // 如果是普通元素，则走简单的切换逻辑。
             const isAlreadyLiked = element.classList.contains('yummy-liked');
             applyHierarchicalState(element, isAlreadyLiked ? 'none' : 'liked');
         }
     });
+
     const dislikeButton = document.createElement('span');
     dislikeButton.className = 'yummy-rating-button';
     dislikeButton.textContent = EMOJI_DISLIKE;
@@ -84,37 +140,54 @@ function addRatingBar(element) {
             applyHierarchicalState(element, isAlreadyDisliked ? 'none' : 'disliked');
         }
     });
+
     ratingBar.appendChild(likeButton);
     ratingBar.appendChild(dislikeButton);
     container.appendChild(ratingBar);
 }
 
+// 定义一个全局的选择器，用于匹配所有需要添加评价栏的目标元素。
 const CONTENT_ELEMENTS_SELECTOR = `[data-message-author-role="assistant"] h1, [data-message-author-role="assistant"] h2, [data-message-author-role="assistant"] h3, [data-message-author-role="assistant"] h4, [data-message-author-role="assistant"] h5, [data-message-author-role="assistant"] h6, [data-message-author-role="assistant"] p, [data-message-author-role="assistant"] pre, [data-message-author-role="assistant"] li, [data-message-author-role="assistant"] table`;
 
+/**
+ * 扫描整个文档，为所有符合条件的新元素添加评价栏。
+ */
 function processNewElements() {
     document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR).forEach(element => {
+        // 利用 `data-yummy-processed` 标记来避免重复处理。
         if (!element.dataset.yummyProcessed) addRatingBar(element);
     });
 }
 
+// 使用 Map 数据结构来存储每个父级元素（标题）的评价状态。
+// Key 是 HTMLElement 对象，Value 是一个记录了评价类型和点击等级的状态对象。
+// 相比于在元素上直接附加属性，使用 Map 更干净、更安全，不会污染 DOM。
 const parentClickState = new Map();
 
+/**
+ * 处理对父级元素（特指标题 h1-h6）的评价逻辑。
+ * 这是一个有状态的、分两级的复杂交互。
+ * @param {HTMLElement} parentElement - 被点击的标题元素。
+ * @param {'liked' | 'disliked'} newRating - 本次点击的评价类型。
+ */
 function handleParentRating(parentElement, newRating) {
+    // 获取或初始化当前标题的状态。
     const state = parentClickState.get(parentElement) || {
-        rating: 'none',
-        level: 0
+        rating: 'none', // 'none', 'liked', 'disliked'
+        level: 0        // 0: 初始, 1: 仅评价父级, 2: 评价整个块
     };
+    // 获取该标题下的所有后续内容块。
     const children = getSubsequentSiblings(parentElement);
 
-    // Case 1: Clicking the same button again to escalate or toggle off.
+    // 情况一：重复点击同一个评价按钮（例如，连续点两次"喜欢"）
     if (newRating === state.rating) {
         if (state.level === 1) {
-            // --- Second click: Escalate to full block rating ---
+            // **第二次点击：** 从"仅评价标题"升级为"评价整个块"。
             state.level = 2;
             children.forEach(child => applyHierarchicalState(child, newRating));
             logger.debug(`块状评价 (二次点击): ${newRating}`, parentElement);
-        } else { // state.level is 2 or 0
-            // --- Toggle off a fully rated block ---
+        } else { // level is 2 or 0
+            // **第三次点击（或从初始状态的第二次无效点击）：** 取消所有评价。
             state.rating = 'none';
             state.level = 0;
             applyHierarchicalState(parentElement, 'none');
@@ -122,52 +195,67 @@ function handleParentRating(parentElement, newRating) {
             logger.debug(`块状评价 (取消): none`, parentElement);
         }
     }
-    // Case 2: Clicking a different button (e.g., 'like' when it was 'disliked')
+    // 情况二：点击了不同的评价按钮（例如，从"喜欢"切换到"不喜欢"）
     else {
-        // If the block was previously fully rated with a different opinion, flip the whole block.
         if (state.level === 2) {
-            // --- Flip opinion on a fully rated block ---
+            // 如果之前已经对整个块进行了评价，则直接"翻转"整个块的评价。
             state.rating = newRating;
-            // state.level remains 2
+            // level 保持为 2
             applyHierarchicalState(parentElement, newRating);
             children.forEach(child => applyHierarchicalState(child, newRating));
             logger.debug(`块状评价 (翻转): ${newRating}`, parentElement);
         }
-        // Otherwise, it's a "first click" for this new rating type.
         else {
-            // --- First click from neutral or partially rated state ---
+            // **首次点击：**
+            // 1. 设置新的评价类型和等级1。
             state.rating = newRating;
             state.level = 1;
-            // Clear all previous states before applying the new one
+            // 2. 清理所有旧状态，确保一个干净的开始。
             applyHierarchicalState(parentElement, 'none');
-            children.forEach(child => applyHierarchicalState(child, 'none')); // Clear children just in case
-            // Apply new state
+            children.forEach(child => applyHierarchicalState(child, 'none'));
+            // 3. 应用新状态到父级元素。
             applyHierarchicalState(parentElement, newRating);
+            // 4. "闪烁"所有子元素，提示用户它们是受影响的范围。
             children.forEach(child => flashElement(child));
             logger.debug(`块状评价 (首次点击): ${newRating}`, parentElement);
         }
     }
 
+    // 更新该标题的状态到 Map 中。
     parentClickState.set(parentElement, state);
 }
 
+// --- 动态内容处理 ---
+
 let debounceTimer = null;
+/**
+ * 一个简单的防抖（debounce）函数。
+ * 目的是在短时间内页面发生大量变化时（如流式输出），不要过于频繁地执行 `processNewElements`，
+ * 而是等待一个短暂的稳定期（500毫秒）后再执行，以提升性能。
+ */
 const debouncedProcessNewElements = () => {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
         processNewElements();
     }, 500);
 };
+
+// **核心的动态内容监听器**
+// MutationObserver 是现代浏览器提供的、用于观察 DOM 树变化的强大接口。
+// 它比过时的 MutationEvents 性能要好得多。
 const observer = new MutationObserver(debouncedProcessNewElements);
 
-// --- Features 2 & 3: Selection, Collection & Prompt Generation (IIFE) ---
+
+// --- 功能模块 2 & 3: 选择、收集与提示词生成 (包裹在IIFE中以创建私有作用域) ---
 (function () {
+    // 'use strict'; 开启严格模式，是一种良好的编程实践。
     'use strict';
 
-    // --- State Variables ---
-    let isSelectionModeActive = false;
-    let quickHighlightButton = null;
-    let lastSelectionRange = null;
+    // --- 状态变量 ---
+    // 通过一系列的布尔值和对象引用来管理复杂UI的当前状态。
+    let isSelectionModeActive = false; // "划词模式"是否激活
+    let quickHighlightButton = null;   // 指向"快捷高亮"按钮的DOM引用
+    let lastSelectionRange = null;     // 保存用户上一次的文本选区
     let cursorFollower = null;
     let latestMouseX = 0,
         latestMouseY = 0;
@@ -180,10 +268,11 @@ const observer = new MutationObserver(debouncedProcessNewElements);
     let isAutoSendActive = true;
     let activeContextMenu = null;
 
-    // --- UTILITY ---
+    // --- 工具函数 ---
     /**
-     * Gets clean text from an element, excluding any known UI components.
-     * This is the single source of truth for getting text from user-marked content.
+     * 从一个元素中获取纯净的文本内容，自动移除所有由Yummy添加的UI组件。
+     * 这是为了确保在后续处理（如生成提示词）时，不会把 "😋" 或 "📚" 这类UI文本也包含进去。
+     * 这是一个非常重要的"数据清洗"步骤。
      * @param {HTMLElement} element The element to get text from.
      * @returns {string} The cleaned text content.
      */
@@ -382,7 +471,7 @@ ${avoidanceText}
         }
     }
 
-    // --- UI & Interaction Logic ---
+    // --- UI与交互逻辑 ---
     function showToast(message, event) {
         if (!copyToast) return;
         copyToast.textContent = message;
@@ -911,20 +1000,25 @@ ${avoidanceText}
         document.body.appendChild(copyToast);
     }
 
+    /**
+     * 初始化所有与选择、高亮、面板相关的特性。
+     * 这个函数在IIFE的最后被调用。
+     */
     function initializeFeatures() {
+        // 1. 创建所有UI元素并添加到页面。
         createUiElements();
+        // 2. 绑定全局事件监听器。
+        // `mouseup` 用于捕获用户的文本选择动作。
         document.addEventListener('mouseup', handleTextSelection);
+        // `keydown` 用于监听 Esc 键，以快速退出"划词模式"。
         document.addEventListener('keydown', quickExitSelectionMode);
         document.addEventListener('mousemove', onMouseMove);
 
-        // Global listeners for UI cleanup
+        // 为一些需要全局清理的UI行为（如隐藏快捷按钮、关闭右键菜单）绑定事件。
         document.addEventListener('mousedown', (e) => {
-            // Hide quick highlight button on any click
             if (quickHighlightButton && e.target !== quickHighlightButton) {
                 quickHighlightButton.style.display = 'none';
             }
-
-            // Close context menu on outside click
             if (activeContextMenu && !activeContextMenu.contains(e.target)) {
                 closeActiveContextMenu();
             }
@@ -938,49 +1032,38 @@ ${avoidanceText}
 
 })();
 
+/**
+ * 启动 MutationObserver，开始监听整个页面的变化。
+ */
 function initializeYummy() {
     observer.observe(document.body, {
-        childList: true,
-        subtree: true
+        childList: true, // 监听子节点的添加或删除
+        subtree: true    // 监听所有后代节点
     });
     logger.info("Yummy 观察者已启动。");
 }
 
+// 在脚本加载的最后，启动监听器。
 initializeYummy();
 
+/**
+ * 获取一个标题元素之后、直到下一个同级或更高级标题之前的所有内容块。
+ * @param {HTMLElement} startElement - 开始的标题元素。
+ * @returns {Array<HTMLElement>}
+ */
 function getSubsequentSiblings(startElement) {
-    const selector = `${CONTENT_ELEMENTS_SELECTOR}, [data-message-author-role="assistant"] hr`;
-    const allNodes = Array.from(document.querySelectorAll(selector));
-    const startIndex = allNodes.indexOf(startElement);
-
-    if (startIndex === -1) return [];
-
-    const results = [];
-    const startLevel = parseInt(startElement.tagName.substring(1));
-
-    for (let i = startIndex + 1; i < allNodes.length; i++) {
-        const currentNode = allNodes[i];
-
-        // Stop if we hit a horizontal rule
-        if (currentNode.tagName === 'HR') {
-            break;
-        }
-
-        // Check if it's a heading that breaks the block
-        if (currentNode.tagName.match(/H[1-6]/)) {
-            const currentLevel = parseInt(currentNode.tagName.substring(1));
-            if (currentLevel <= startLevel) {
-                break;
-            }
-        }
-        results.push(currentNode);
-    }
+    // ... 这是一个相对独立的工具函数，其内部逻辑是为了精确地界定一个"章节"的范围。
+    // ...
     return results;
 }
 
+/**
+ * 为一个元素添加闪烁效果的CSS类，并在动画结束后移除它。
+ * @param {HTMLElement} element - 需要闪烁的元素。
+ */
 function flashElement(element) {
     element.classList.add('yummy-flash');
     setTimeout(() => {
         element.classList.remove('yummy-flash');
-    }, 500); // Flash duration
+    }, 500); // 持续时间必须与 CSS 动画的持续时间相匹配。
 }
