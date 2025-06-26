@@ -40,18 +40,70 @@
 
         const header = document.createElement('div');
         header.id = 'yummy-log-header';
-        header.innerHTML = `<span>Yummy! 日志 (v2)</span><span style="font-weight:normal; font-size: 11px; margin-left: 10px;">(Level: ${Object.keys(logLevels).find(key => logLevels[key] === currentLevel)})</span>`;
         Object.assign(header.style, {
             padding: '8px 12px',
             cursor: 'move',
             backgroundColor: 'rgba(50, 50, 50, 0.9)',
             color: 'white',
-            textAlign: 'center',
             fontWeight: 'bold',
             borderBottom: '1px solid #444',
             userSelect: 'none',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
         });
 
+        const titleSpan = document.createElement('span');
+        titleSpan.id = 'yummy-log-title';
+        titleSpan.innerHTML = `<span>Yummy! 日志 (v2)</span><span style="font-weight:normal; font-size: 11px; margin-left: 10px;">(Level: ${Object.keys(logLevels).find(key => logLevels[key] === currentLevel)})</span>`;
+
+        const buttonContainer = document.createElement('div');
+        Object.assign(buttonContainer.style, {
+            display: 'flex',
+            gap: '10px',
+            alignItems: 'center',
+        });
+
+        const copyButton = document.createElement('span');
+        copyButton.id = 'yummy-log-copy-btn';
+        copyButton.textContent = '📋';
+        copyButton.title = '复制所有日志';
+        Object.assign(copyButton.style, {
+            cursor: 'pointer',
+            fontSize: '16px',
+        });
+        copyButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (logContentDiv) {
+                navigator.clipboard.writeText(logContentDiv.innerText).then(() => {
+                    copyButton.textContent = '✅';
+                    setTimeout(() => { copyButton.textContent = '📋'; }, 1500);
+                }).catch(err => {
+                    logger.error('复制日志失败', err);
+                });
+            }
+        });
+
+        const closeButton = document.createElement('span');
+        closeButton.id = 'yummy-log-close-btn';
+        closeButton.textContent = '✖️';
+        closeButton.title = '关闭日志面板';
+        Object.assign(closeButton.style, {
+            cursor: 'pointer',
+            fontSize: '16px',
+        });
+        closeButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (logContainer) {
+                logContainer.style.display = 'none';
+            }
+        });
+        
+        buttonContainer.appendChild(copyButton);
+        buttonContainer.appendChild(closeButton);
+
+        header.appendChild(titleSpan);
+        header.appendChild(buttonContainer);
 
         logContentDiv = document.createElement('div');
         logContentDiv.id = 'yummy-log-content';
@@ -161,9 +213,9 @@
             if (newLevel) {
                 currentLevel = newLevel;
                 logger.info(`Log level set to ${levelName.toUpperCase()}`);
-                const header = document.getElementById('yummy-log-header');
-                if (header) {
-                    header.innerHTML = `<span>Yummy! 日志 (v2)</span><span style="font-weight:normal; font-size: 11px; margin-left: 10px;">(Level: ${levelName.toUpperCase()})</span>`;
+                const titleElement = document.getElementById('yummy-log-title');
+                if (titleElement) {
+                    titleElement.innerHTML = `<span>Yummy! 日志 (v2)</span><span style="font-weight:normal; font-size: 11px; margin-left: 10px;">(Level: ${levelName.toUpperCase()})</span>`;
                 }
             } else {
                 logger.warn(`Invalid log level: ${levelName}`);

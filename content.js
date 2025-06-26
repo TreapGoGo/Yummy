@@ -1008,11 +1008,26 @@ ${avoidanceText}
         // 1. 创建所有UI元素并添加到页面。
         createUiElements();
         // 2. 绑定全局事件监听器。
-        // `mouseup` 用于捕获用户的文本选择动作。
         document.addEventListener('mouseup', handleTextSelection);
-        // `keydown` 用于监听 Esc 键，以快速退出"划词模式"。
         document.addEventListener('keydown', quickExitSelectionMode);
         document.addEventListener('mousemove', onMouseMove);
+
+        document.addEventListener('click', (event) => {
+            // 新增逻辑：当点击页面其他位置时，隐藏收集面板
+            if (
+                collectionPanel &&
+                collectionPanel.classList.contains('visible') &&
+                !isCollectionPanelPinned &&
+                !collectionPanel.contains(event.target)
+            ) {
+                // 确保点击的不是打开面板的按钮，避免刚打开就关闭
+                const controlPanel = document.querySelector('.yummy-control-panel');
+                if (!controlPanel || !controlPanel.contains(event.target)) {
+                    collectionPanel.classList.remove('visible');
+                    logger.debug('Clicked outside, hiding collection panel.');
+                }
+            }
+        });
 
         // 为一些需要全局清理的UI行为（如隐藏快捷按钮、关闭右键菜单）绑定事件。
         document.addEventListener('mousedown', (e) => {
