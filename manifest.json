@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "Yummy!",
     "description": "精细取舍",
-    "version": "0.5",
+    "version": "0.5.1",
     "content_scripts": [
         {
             "matches": [
