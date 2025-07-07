@@ -93,18 +93,21 @@ function addRatingBar(element) {
     const ratingBar = document.createElement('div');
     ratingBar.className = 'yummy-rating-bar';
 
-    // **精妙的对齐修正**
-    // 默认情况下，评价栏的 top 会是0，这会导致它与各自元素的顶部对齐，在视觉上参差不齐。
-    // 这段代码通过计算元素相对于整个对话轮次容器（'.group/conversation-turn'）的顶部偏移，
-    // 来动态设置评价栏的 `top` 样式。
-    // 这确保了在同一个对话轮次中，所有评价栏都能与它们各自内容的第一行文本精准对齐，
-    // 形成一条干净的垂直线，极大地提升了视觉体验。
+    // --- 新增：绝对水平对齐逻辑 (v0.4.6) ---
+    // 为了解决列表缩进导致评价栏错位的问题，我们采用JS动态计算其绝对水平位置。
+    // 1. 找到一个稳定的、所有评价栏共有的祖先容器作为基准（这里是'.group/conversation-turn'）。
+    // 2. 计算当前元素容器（.yummy-paragraph-container）相对于基准容器的水平偏移量（即缩进量）。
+    // 3. 从预设的左偏移（-85px）中减去这个缩进量，得到新的left值。
+    // 这样，无论元素（如<li>）缩进了多少，其评价栏的最终绝对位置都会被校正到同一垂直线上，实现精准对齐。
     const turnContainer = element.closest('.group\\/conversation-turn');
     if (turnContainer) {
-        const elementRect = element.getBoundingClientRect();
-        const turnRect = turnContainer.getBoundingClientRect();
-        const top = elementRect.top - turnRect.top;
-        ratingBar.style.top = `${top}px`;
+        const turnContainerRect = turnContainer.getBoundingClientRect();
+        // `container` 就是 .yummy-paragraph-container
+        const containerRect = container.getBoundingClientRect(); 
+        const indentation = containerRect.left - turnContainerRect.left;
+        const baseLeftOffset = -85; // 这个值必须与 style.css 中的 `padding-left` 和 `margin-left` 联动
+        
+        ratingBar.style.left = `${baseLeftOffset - indentation}px`;
     }
 
     const likeButton = document.createElement('span');

@@ -17,7 +17,13 @@
       但在逻辑上，它本应是评价栏的直接定位锚点。这是后续版本可能需要优化的点。
 */
 .yummy-paragraph-container {
-    position: static;
+    /* 
+      **核心变更：创建定位上下文**
+      通过将 position 设置为 relative，这个容器现在成为了其内部
+      所有 `position: absolute` 子元素的定位锚点。
+      这是解决评价栏位置不稳定问题的关键。
+    */
+    position: relative;
     /*
       **核心交互增强：扩大悬停区域**
       通过增加左内边距（padding-left），我们让这个容器向左侧空白区域延伸，
@@ -40,8 +46,15 @@
     /* 
       关键定位：通过绝对定位，将评价栏从正常的文档流中脱离，使其可以"悬浮"在页面上。
       它会相对于最近的、非 static 定位的祖先元素进行定位。
+      在本次修改后，这个祖先元素就是 .yummy-paragraph-container。
     */
     position: absolute;
+    /*
+      **新增：垂直定位**
+      将其固定在相对父容器顶部 2px 的位置。由于父容器位置是稳定的，
+      因此评价栏的垂直位置也随之稳定。
+    */
+    top: 2px;
     /* 
       水平定位：-85px 是一个精心选择的"魔术数字"，目的是让评价栏正好出现在
       ChatGPT 对话气泡左侧的空白区域，既不遮挡文本，又方便鼠标触及。
@@ -129,18 +142,69 @@
 /*
   评价状态高亮 (.yummy-liked, .yummy-disliked)
   这是用户评价后最主要的视觉反馈。
+  为了实现"不影响排版"的带内边距圆角高亮，我们采用了伪元素方案。
 */
-.yummy-liked {
+.yummy-liked,
+.yummy-disliked {
     /* 
-      使用带透明度的 RGBA 颜色，而不是不透明的 HEX 颜色，
-      可以让高亮效果更柔和，隐约透出底层的页面结构。
-      !important 用于确保我们的样式能覆盖 ChatGPT 的默认样式。
+      1. 移除直接的背景色，因为它无法实现带 padding 的圆角而不影响布局。
     */
-    background-color: rgba(221, 247, 221, 0.8) !important;
+    background-color: transparent !important;
+    /* 
+      2. 创建新的堆叠上下文 (stacking context)。
+      这是让 z-index: -1 在 ::before 伪元素上按预期工作的关键。
+      任何非 `static` 的 `position` 值都会创建堆叠上下文。
+    */
+    position: relative;
+    /*
+      3. 确保元素自身在堆叠上下文中位于 z=0 的层级。
+    */
+    z-index: 0;
 }
 
-.yummy-disliked {
-    background-color: rgba(255, 221, 221, 0.8) !important;
+/*
+  高亮伪元素 ("衬底")
+  这才是真正的高亮色块。它作为元素的 ::before 伪元素存在。
+*/
+.yummy-liked::before,
+.yummy-disliked::before {
+    /* 必须项：伪元素需要 content 属性才能被渲染 */
+    content: '';
+    /* 
+      关键定位：将其绝对定位于父元素（即 .yummy-liked/.yummy-disliked 本身）
+    */
+    position: absolute;
+    /*
+      关键的 z-index：值为 -1 会将这个伪元素置于其父元素堆叠上下文的最底层，
+      也就是在父元素的文本内容的"下方"。这就是"衬底"效果的来源。
+    */
+    z-index: -1;
+    
+    /* 
+      创建"内边距"效果：通过使用负值，我们将伪元素的边界扩展到其父元素的边界之外。
+      例如 top: -4px; 意味着伪元素的上边界比其父元素的上边界还要高 4px。
+      这就在不使用 `padding` 属性、不挤压内部文本空间的情况下，创造了视觉上的内边距。
+    */
+    top: -2px;
+    bottom: -2px;
+    left: -6px;
+    right: -6px;
+
+    /*
+      圆角效果：直接在作为色块的伪元素上应用。
+    */
+    border-radius: 6px;
+}
+
+/*
+  为两种状态分别设置"衬底"的颜色。
+*/
+.yummy-liked::before {
+    background-color: rgba(221, 247, 221, 0.8);
+}
+
+.yummy-disliked::before {
+    background-color: rgba(255, 221, 221, 0.8);
 }
 
 /*
