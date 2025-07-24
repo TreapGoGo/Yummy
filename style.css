@@ -421,36 +421,51 @@ body.yummy-selection-mode-active {
 }
 
 #yummy-collection-content {
-    flex-grow: 1;
     overflow-y: auto;
     padding: 8px;
-    display: flex;
+    flex-grow: 1; /* 让内容区域填满剩余空间 */
+    display: flex; /* v0.5.12: 改为flex布局以支持gap */
     flex-direction: column;
-    gap: 8px;
+    gap: 8px; /* v0.5.12: 为条目之间添加统一间距 */
 }
 
 .yummy-collection-item {
-    position: relative;
     background-color: #ffffff;
     border: 1px solid #d1d5db;
     border-radius: 6px;
     padding: 10px;
     font-size: 14px;
-    line-height: 1.5;
-    cursor: pointer;
-    transition: background-color 0.2s, border-left-color 0.2s;
+    line-height: 1.6; /* 增加行高以改善可读性 */
     word-wrap: break-word;
     white-space: pre-wrap;
-    border-left: 3px solid #d1d5db;
+    transition: background-color 0.2s;
+    
+    /* v0.5.12: 采用 Grid 布局实现悬挂对齐 */
+    display: grid;
+    grid-template-columns: auto 1fr; /* 第一列宽度自适应，第二列占满剩余空间 */
+    gap: 0 8px; /* 列间距8px，行间距0 */
+    align-items: start; /* 顶部对齐 */
 }
+
+/* v0.5.12: 复选框本身（第一列）的样式 */
+.yummy-collection-item-checkbox {
+    margin-top: 3px; /* 微调，使其与文本第一行基线更对齐 */
+}
+
+/* v0.5.12: 文本容器（第二列）的样式 */
+.yummy-collection-item-text {
+    /* 无需特殊样式，Grid布局会自动处理换行和对齐 */
+}
+
 
 .yummy-collection-item.starred {
     background-color: #f0f8ff;
     border-left: 3px solid #3b82f6;
+    padding-left: 7px;
 }
 
 .yummy-collection-item:hover {
-    background-color: #eff6ff;
+    background-color: #f9fafb;
 }
 
 .yummy-collection-item.copied {
@@ -458,10 +473,49 @@ body.yummy-selection-mode-active {
     transition: background-color 0.1s;
 }
 
+/* v0.5.12: 收集面板脚部样式 */
+#yummy-collection-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-top: 1px solid #e0e0e0;
+    background-color: #fafafa;
+}
+
+#yummy-collection-select-all-container {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+#yummy-collection-select-all-container label {
+    margin-left: 6px;
+    font-size: 13px;
+    user-select: none; /* 防止文字被选中 */
+    cursor: pointer;
+}
+
+#yummy-collection-copy-selected-btn {
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    background-color: #f0f0f0;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+#yummy-collection-copy-selected-btn:hover {
+    background-color: #e0e0e0;
+    border-color: #bbb;
+}
+
 /* --- Context Menu --- */
 .yummy-context-menu {
     position: fixed;
-    z-index: 10005;
+    z-index: 10001;
     background-color: #ffffff;
     border: 1px solid #e5e7eb;
     border-radius: 8px;

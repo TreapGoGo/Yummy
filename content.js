@@ -167,6 +167,9 @@ function processNewElements() {
         // 利用 `data-yummy-processed` 标记来避免重复处理。
         if (!element.dataset.yummyProcessed) addRatingBar(element);
     });
+    // v0.5.12 修复：在DOM变化稳定后（即ChatGPT停止打字后）自动同步一次。
+    // 这可以确保即使用户在文本生成过程中点击了“喜欢”，最终同步的也是完整的段落。
+    syncCollectionPanelWithDOM();
 }
 
 // 使用 Map 数据结构来存储每个父级元素（标题）的评价状态。
@@ -278,6 +281,9 @@ const observer = new MutationObserver(debouncedProcessNewElements);
     let isAutoSendActive = true;
     let activeContextMenu = null;
 
+    // v0.5.12 新增：用于独立存储每个收集条目的选中状态
+    let collectionItemStates = new Map();
+
     // --- 工具函数 ---
     /**
      * 从一个元素中获取纯净的文本内容，自动移除所有由Yummy添加的UI组件。
@@ -292,6 +298,21 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         clone.querySelectorAll('.yummy-rating-bar, .yummy-selection-highlight, .yummy-control-panel, #yummy-quick-highlight-button, #yummy-collection-panel').forEach(ui => ui.remove());
         return clone.textContent.trim();
     };
+
+    /**
+     * 为字符串生成一个简单的、稳定的哈希ID。
+     * @param {string} str 
+     * @returns {string}
+     */
+    function simpleHash(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = (hash << 5) - hash + char;
+            hash |= 0; // Convert to 32bit integer
+        }
+        return `yummy-id-${Math.abs(hash)}`;
+    }
 
 
     // --- Prompt Generation Logic ---
@@ -745,43 +766,85 @@ ${avoidanceText}
     // v0.5.8 修复作用域问题：将此函数赋值给全局占位符，以便 applyHierarchicalState 可以调用它。
     syncCollectionPanelWithDOM = function() {
         if (!collectionContent) return;
-        collectionContent.innerHTML = ''; // 清空现有列表，实现“替换”而非“追加”
-
-        const uniqueContent = new Set();
-
-        // 查找所有“喜欢”和“高亮”的元素
+        
+        // --- v0.5.13 变更检测 ---
+        // 1. 获取新一轮的ID列表
+        const newContentMap = new Map();
         const likedItems = document.querySelectorAll('.yummy-liked');
         const highlightedItems = document.querySelectorAll('.yummy-selection-highlight');
-
-        // 将元素的纯净文本添加到 Set 中以自动去重
-        likedItems.forEach(item => {
-            const text = getCleanText(item);
-            if (text) uniqueContent.add(text);
-        });
-        highlightedItems.forEach(item => {
-            const text = getCleanText(item);
-            if (text) uniqueContent.add(text);
-        });
         
-        // 将去重后的内容重新添加到收集面板
-        if (uniqueContent.size > 0) {
-            uniqueContent.forEach(text => {
-                if (text) addItemToCollection(text);
+        const processItemsForId = (items) => {
+            items.forEach(item => {
+                const text = getCleanText(item);
+                if (text) {
+                    const id = simpleHash(text);
+                    if (!newContentMap.has(id)) {
+                        newContentMap.set(id, text);
+                    }
+                }
+            });
+        };
+        processItemsForId(likedItems);
+        processItemsForId(highlightedItems);
+        const newIds = Array.from(newContentMap.keys());
+
+        // 2. 获取当前面板上的ID列表
+        const currentIds = Array.from(collectionContent.querySelectorAll('.yummy-collection-item')).map(item => item.dataset.yummyItemId);
+
+        // 3. 比较新旧ID列表，如果没有实际变化，则静默退出，避免日志刷屏和不必要的重绘
+        if (newIds.length === currentIds.length && newIds.every(id => currentIds.includes(id))) {
+            return; // 内容无变化，无需同步
+        }
+        // --- 变更检测结束 ---
+
+        // 渲染前，先移除在DOM中已不存在的条目的状态
+        const existingIds = new Set(newContentMap.keys());
+        for (const id of collectionItemStates.keys()) {
+            if (!existingIds.has(id)) {
+                collectionItemStates.delete(id);
+            }
+        }
+        
+        collectionContent.innerHTML = ''; // 清空现有列表，实现“替换”而非“追加”
+
+        if (newContentMap.size > 0) {
+            newContentMap.forEach((text, id) => {
+                 addItemToCollection(text, id);
             });
         }
-        logger.info(`收集面板已自动同步，共 ${uniqueContent.size} 个条目。`);
+        
+        updateSelectAllCheckboxState(); // v0.5.12: 每次同步后都需要更新“全选”按钮的状态
+
+        logger.info(`收集面板已自动同步，共 ${newContentMap.size} 个条目。`);
     }
 
-    function addItemToCollection(text) {
+    function addItemToCollection(text, id) {
         if (!collectionContent) return;
+
+        // v0.5.12: 包含复选框和文本的容器
         const item = document.createElement('div');
         item.className = 'yummy-collection-item';
-        item.textContent = text;
-        item.title = '左键单击可复制，右键单击可打开菜单';
+        item.dataset.yummyItemId = id;
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        // 从状态Map中读取状态，如果不存在则默认为true
+        checkbox.checked = collectionItemStates.get(id) ?? true;
+        checkbox.className = 'yummy-collection-item-checkbox';
+        checkbox.title = '选中/取消选中';
 
-        item.addEventListener('click', (event) => {
-            event.stopPropagation(); // 阻止事件冒泡，这很关键
-            const textToCopy = item.textContent || '';
+        const textSpan = document.createElement('span');
+        textSpan.className = 'yummy-collection-item-text';
+        textSpan.textContent = text;
+        textSpan.title = '单击可复制单个条目，右键单击可打开菜单';
+
+        item.appendChild(checkbox);
+        item.appendChild(textSpan);
+
+        // 单击文本部分依然可以复制单个条目
+        textSpan.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const textToCopy = textSpan.textContent || '';
             navigator.clipboard.writeText(textToCopy).then(() => {
                 showToast('已复制!', event);
                 item.classList.add('copied');
@@ -791,14 +854,48 @@ ${avoidanceText}
                 showToast('复制失败!', event);
             });
         });
+        
+        // 监听单个复选框的变化，以更新状态和“全选”复选框
+        checkbox.addEventListener('change', () => {
+            collectionItemStates.set(id, checkbox.checked);
+            updateSelectAllCheckboxState();
+        });
 
-        item.addEventListener('contextmenu', (e) => {
-            showContextMenu(e, item);
+        textSpan.addEventListener('contextmenu', (e) => {
+            showContextMenu(e, textSpan);
         });
 
         collectionContent.appendChild(item);
         collectionContent.scrollTop = collectionContent.scrollHeight;
     }
+
+    // v0.5.12 优化：根据条目复选框的勾选状态，更新“全选”复选框（支持中间态）
+    function updateSelectAllCheckboxState() {
+        const allCheckboxes = collectionContent.querySelectorAll('.yummy-collection-item-checkbox');
+        const selectAllCheckbox = document.getElementById('yummy-collection-select-all');
+        if (!selectAllCheckbox) return;
+
+        const total = allCheckboxes.length;
+        if (total === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+            return;
+        }
+        
+        const checkedCount = Array.from(allCheckboxes).filter(cb => cb.checked).length;
+
+        if (checkedCount === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+        } else if (checkedCount === total) {
+            selectAllCheckbox.checked = true;
+            selectAllCheckbox.indeterminate = false;
+        } else {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = true;
+        }
+    }
+
 
     function quickExitSelectionMode(event) {
         if (isSelectionModeActive && (event.key === 'Escape' || event.keyCode === 27)) {
@@ -890,7 +987,7 @@ ${avoidanceText}
 
         const collectionHeaderText = document.createElement('span');
         collectionHeaderText.textContent = '📋 Yummy 收集面板';
-        collectionHeader.title = '点击复制所有收集到的内容';
+        collectionHeader.title = '点击可钉住/取消钉住面板';
 
         const collectionClearBtn = document.createElement('span');
         collectionClearBtn.id = 'yummy-collection-clear-btn';
@@ -905,6 +1002,31 @@ ${avoidanceText}
         collectionContent = document.createElement('div');
         collectionContent.id = 'yummy-collection-content';
         collectionPanel.appendChild(collectionContent);
+
+        // v0.5.12 新增: 收集面板脚部
+        const collectionFooter = document.createElement('div');
+        collectionFooter.id = 'yummy-collection-footer';
+
+        const selectAllContainer = document.createElement('div');
+        selectAllContainer.id = 'yummy-collection-select-all-container';
+        const selectAllCheckbox = document.createElement('input');
+        selectAllCheckbox.type = 'checkbox';
+        selectAllCheckbox.id = 'yummy-collection-select-all';
+        selectAllCheckbox.checked = true;
+        const selectAllLabel = document.createElement('label');
+        selectAllLabel.htmlFor = 'yummy-collection-select-all';
+        selectAllLabel.textContent = '全选';
+        selectAllContainer.appendChild(selectAllCheckbox);
+        selectAllContainer.appendChild(selectAllLabel);
+
+        const copySelectedBtn = document.createElement('button');
+        copySelectedBtn.id = 'yummy-collection-copy-selected-btn';
+        copySelectedBtn.textContent = '复制选中内容';
+        
+        collectionFooter.appendChild(selectAllContainer);
+        collectionFooter.appendChild(copySelectedBtn);
+        collectionPanel.appendChild(collectionFooter);
+
         document.body.appendChild(collectionPanel);
 
         // --- Event Listeners ---
@@ -935,6 +1057,8 @@ ${avoidanceText}
                     return;
                 }
                 collectionContent.innerHTML = '';
+                collectionItemStates.clear(); // v0.5.12: 清空时也要清除状态
+                updateSelectAllCheckboxState();
                 logger.info('收集面板已清空。');
                 showToast('面板已清空', e);
             }
@@ -942,23 +1066,7 @@ ${avoidanceText}
 
         collectionHeader.addEventListener('click', (e) => {
             if (collectionPinBtn.contains(e.target) || collectionClearBtn.contains(e.target)) return;
-            const allText = Array.from(collectionContent.children)
-                .map(item => item.textContent)
-                .join('\n\n---\n\n');
-            if (!allText) {
-                showToast('面板是空的', e);
-                return;
-            }
-            navigator.clipboard.writeText(allText).then(() => {
-                const originalText = collectionHeaderText.textContent;
-                collectionHeaderText.textContent = '✅ 已全部复制!';
-                setTimeout(() => {
-                    collectionHeaderText.textContent = originalText;
-                }, 1500);
-            }).catch(err => {
-                logger.error('一键复制全部失败', err);
-                showToast('复制失败', e);
-            });
+             collectionPinBtn.click();
         });
 
         // Auto-hide logic
@@ -977,6 +1085,40 @@ ${avoidanceText}
                 }, 1000);
             }
         });
+
+        // v0.5.12: “全选”复选框的事件监听
+        selectAllCheckbox.addEventListener('change', () => {
+            const isChecked = selectAllCheckbox.checked;
+            const allItemCheckboxes = collectionContent.querySelectorAll('.yummy-collection-item-checkbox');
+            allItemCheckboxes.forEach(cb => {
+                cb.checked = isChecked;
+                const itemId = cb.closest('.yummy-collection-item').dataset.yummyItemId;
+                if(itemId) {
+                    collectionItemStates.set(itemId, isChecked);
+                }
+            });
+        });
+
+        // v0.5.12: “复制选中内容”按钮的事件监听
+        copySelectedBtn.addEventListener('click', (e) => {
+            const selectedItems = collectionContent.querySelectorAll('.yummy-collection-item input:checked');
+            if (selectedItems.length === 0) {
+                showToast('没有选中的内容', e);
+                return;
+            }
+
+            const allText = Array.from(selectedItems)
+                .map(cb => cb.closest('.yummy-collection-item').querySelector('.yummy-collection-item-text').textContent)
+                .join('\n\n---\n\n');
+
+            navigator.clipboard.writeText(allText).then(() => {
+                 showToast(`已复制 ${selectedItems.length} 个条目`, e);
+            }).catch(err => {
+                logger.error('复制选中内容失败', err);
+                showToast('复制失败', e);
+            });
+        });
+
 
         // Quick hide button
         quickHighlightButton = document.createElement('div');
