@@ -682,6 +682,7 @@ ${avoidanceText}
         }
     }
 
+    /* vNext: 移除右键菜单逻辑
     function showContextMenu(event, item) {
         event.preventDefault();
         closeActiveContextMenu();
@@ -756,6 +757,7 @@ ${avoidanceText}
         menu.style.top = `${y}px`;
         menu.style.left = `${x}px`;
     }
+    */
 
     /**
      * v0.5.7 核心重构:
@@ -866,9 +868,11 @@ ${avoidanceText}
             });
         });
 
+        /* vNext: 移除右键菜单的事件监听
         textContent.addEventListener('contextmenu', (e) => {
             showContextMenu(e, textContent);
         });
+        */
 
         collectionContent.appendChild(item);
         collectionContent.scrollTop = collectionContent.scrollHeight;
@@ -884,6 +888,11 @@ ${avoidanceText}
         if (total === 0) {
             selectAllCheckbox.checked = false;
             selectAllCheckbox.indeterminate = false;
+            // vNext: 修复 - 确保在面板为空时，也清理容器的 class
+            if(selectAllContainer) {
+                selectAllContainer.classList.remove('indeterminate');
+                selectAllContainer.classList.remove('checked');
+            }
             return;
         }
         
@@ -895,15 +904,24 @@ ${avoidanceText}
         if (checkedCount === 0) {
             selectAllCheckbox.checked = false;
             selectAllCheckbox.indeterminate = false;
-            if(selectAllContainer) selectAllContainer.classList.remove('indeterminate');
+            if(selectAllContainer) {
+                selectAllContainer.classList.remove('indeterminate');
+                selectAllContainer.classList.remove('checked');
+            }
         } else if (checkedCount === total) {
             selectAllCheckbox.checked = true;
             selectAllCheckbox.indeterminate = false;
-            if(selectAllContainer) selectAllContainer.classList.remove('indeterminate');
+            if(selectAllContainer) {
+                selectAllContainer.classList.remove('indeterminate');
+                selectAllContainer.classList.add('checked');
+            }
         } else {
             selectAllCheckbox.checked = false;
             selectAllCheckbox.indeterminate = true;
-            if(selectAllContainer) selectAllContainer.classList.add('indeterminate');
+            if(selectAllContainer) {
+                selectAllContainer.classList.add('indeterminate');
+                selectAllContainer.classList.remove('checked');
+            }
         }
     }
 
@@ -1000,14 +1018,18 @@ ${avoidanceText}
         collectionHeaderText.textContent = '📋 Yummy 收集面板';
         collectionHeader.title = '点击可钉住/取消钉住面板';
 
+        /* vNext: 移除“清除全部”按钮的创建逻辑
         const collectionClearBtn = document.createElement('span');
         collectionClearBtn.id = 'yummy-collection-clear-btn';
         collectionClearBtn.textContent = '🚮';
         collectionClearBtn.title = '清空所有条目';
+        */
 
         collectionHeader.appendChild(collectionPinBtn);
         collectionHeader.appendChild(collectionHeaderText);
+        /* vNext: 移除“清除全部”按钮的添加逻辑
         collectionHeader.appendChild(collectionClearBtn);
+        */
         collectionPanel.appendChild(collectionHeader);
 
         collectionContent = document.createElement('div');
@@ -1063,6 +1085,7 @@ ${avoidanceText}
             collectionPinBtn.title = isCollectionPanelPinned ? '取消钉住' : '钉住面板';
         });
 
+        /* vNext: 移除“清除全部”按钮的事件监听逻辑
         collectionClearBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (collectionContent) {
@@ -1077,9 +1100,11 @@ ${avoidanceText}
                 showToast('面板已清空', e);
             }
         });
+        */
 
         collectionHeader.addEventListener('click', (e) => {
-            if (collectionPinBtn.contains(e.target) || collectionClearBtn.contains(e.target)) return;
+            // vNext: 从判断条件中移除 collectionClearBtn
+            if (collectionPinBtn.contains(e.target)) return;
              collectionPinBtn.click();
         });
         
@@ -1118,6 +1143,8 @@ ${avoidanceText}
                     collectionItemStates.set(itemId, isChecked);
                 }
             });
+            // vNext: 修复 - 在批量操作后，立即更新全选按钮自身的视觉状态
+            updateSelectAllCheckboxState();
         });
 
         // v0.5.12: “复制选中内容”按钮的事件监听

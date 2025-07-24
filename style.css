@@ -474,17 +474,18 @@ body.yummy-selection-mode-active {
     background-color: #e0e0e0;
 }
 
-/* v0.5.14 & v0.5.15: 状态条内的对勾图标 (用CSS绘制) */
+/* v0.5.14 & v0.5.15 & vNext: 状态条内的对勾图标 (用CSS绘制) */
 .yummy-item-status-bar::before {
     content: '';
     position: absolute;
-    top: 45%;
+    top: 50%;
     left: 50%;
     width: 6px;
     height: 12px;
     border: solid white;
     border-width: 0 3px 3px 0;
-    transform: translate(-50%, -50%) rotate(45deg) scale(0.8);
+    /* vNext: 修正对勾的方向和动画。先统一平移至中心，再进行旋转。同时调整垂直平移比例(-60%)以修正视觉中心。*/
+    transform: translate(-50%, -60%) rotate(45deg) scale(0.8);
     opacity: 0;
     transition: opacity 0.2s ease, transform 0.2s ease;
 }
@@ -499,7 +500,8 @@ body.yummy-selection-mode-active {
 /* v0.5.14: 当条目被选中时，显示对勾 */
 .yummy-collection-item.selected .yummy-item-status-bar::before {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+    /* vNext: 修复BUG。确保选中状态也保持旋转，并且放大到正常尺寸，而不是变回 "L" 形。 */
+    transform: translate(-50%, -60%) rotate(45deg) scale(1);
 }
 
 /* v0.5.14: 右侧文本内容区域 */
@@ -550,25 +552,28 @@ body.yummy-selection-mode-active {
     background-color: #d0d0d0;
 }
 /* 全选的“选中”状态 */
+/* vNext: 修复BUG。当JS添加 .checked 类时，背景色也应该变为蓝色。*/
 #yummy-collection-select-all:checked + #yummy-footer-select-all-area,
-#yummy-collection-select-all:checked ~ div { /* Fallback for older structure */
+#yummy-footer-select-all-area.checked {
     background-color: #4A90E2;
 }
-#yummy-collection-select-all:checked ~ div:hover {
+#yummy-footer-select-all-area.checked:hover {
     background-color: #357ABD;
 }
+
 
 /* 全选的“对勾”图标 */
 #yummy-footer-select-all-area::before {
     content: '';
     position: absolute;
-    top: 45%;
+    top: 50%;
     left: 50%;
     width: 7px;
     height: 14px;
     border: solid white;
     border-width: 0 3px 3px 0;
-    transform: translate(-50%, -50%) rotate(45deg);
+    /* vNext: 修正对勾的方向。采用与上方条目内对勾相同的修正策略。 */
+    transform: translate(-50%, -60%) rotate(45deg);
     opacity: 0;
     transition: opacity 0.2s ease;
 }
@@ -599,50 +604,21 @@ body.yummy-selection-mode-active {
     flex-grow: 1; /* 占满剩余空间 */
     padding: 6px 12px;
     font-size: 14px;
-    font-weight: 500;
+    /* vNext: 按要求加粗字体，并更新颜色方案 */
+    font-weight: bold;
     border-radius: 6px;
     border: none;
-    background-color: #e9e9eb;
-    color: #333;
+    background-color: #e0f2e9; /* 柔和的浅绿色 */
+    color: #2e7d32; /* 深绿色文本以保证对比度 */
     cursor: pointer;
     transition: background-color 0.2s, color 0.2s;
     text-align: center;
 }
 
 #yummy-collection-copy-selected-btn:hover {
-    background-color: #dcdce0;
+    background-color: #c8e6d3; /* 悬停时颜色加深 */
+    color: #1b5e20;
 }
 
 /* --- Context Menu --- */
-.yummy-context-menu {
-    position: fixed;
-    z-index: 10001;
-    background-color: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    padding: 6px;
-    display: flex;
-    flex-direction: column;
-    min-width: 150px;
-}
-
-.yummy-context-menu-item {
-    font-size: 14px;
-    padding: 8px 12px;
-    cursor: pointer;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: #374151;
-}
-
-.yummy-context-menu-item:hover {
-    background-color: #f3f4f6;
-}
-
-.yummy-context-menu-item.danger:hover {
-    background-color: #fee2e2;
-    color: #ef4444;
-}
+/* vNext: 删除所有右键菜单样式 */
