@@ -854,12 +854,12 @@ ${avoidanceText}
         const statusBar = document.createElement('div');
         statusBar.className = 'yummy-item-status-bar';
 
-        const textContent = document.createElement('div');
-        textContent.className = 'yummy-item-text-content';
-        textContent.textContent = text;
+        const textContentDiv = document.createElement('div');
+        textContentDiv.className = 'yummy-item-text-content';
+        textContentDiv.textContent = text;
         
         item.appendChild(statusBar);
-        item.appendChild(textContent);
+        item.appendChild(textContentDiv);
 
         statusBar.addEventListener('click', (event) => {
             event.stopPropagation();
@@ -869,9 +869,10 @@ ${avoidanceText}
             updateCategoryCheckboxStates();
         });
         
-        textContent.addEventListener('click', (event) => {
+        // vNext: 修复BUG，将事件监听器绑定到整个div而不是仅文本节点
+        textContentDiv.addEventListener('click', (event) => {
             event.stopPropagation();
-            const textToCopy = textContent.textContent || '';
+            const textToCopy = textContentDiv.textContent || '';
             navigator.clipboard.writeText(textToCopy).then(() => {
                 showToast('已复制!', event);
                 item.classList.add('copied-flash');
