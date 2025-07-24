@@ -278,7 +278,7 @@ const observer = new MutationObserver(debouncedProcessNewElements);
     let collectionHideTimer = null;
     let copyToast = null;
     let isCollectionPanelPinned = false;
-    let isAutoSendActive = true;
+    let isAutoSendActive = false; // vNext: 默认关闭
     let activeContextMenu = null;
     let previewTooltip = null; // vNext: 为预览弹窗创建一个全局引用
     let isPanelAnimating = false; // vNext: 动画锁状态
@@ -287,6 +287,17 @@ const observer = new MutationObserver(debouncedProcessNewElements);
     let collectionItemStates = new Map();
 
     // --- 工具函数 ---
+    /**
+     * 为一个元素添加闪烁效果的CSS类，并在动画结束后移除它。
+     * @param {HTMLElement} element - 需要闪烁的元素。
+     */
+    function flashElement(element) {
+        element.classList.add('yummy-flash');
+        setTimeout(() => {
+            element.classList.remove('yummy-flash');
+        }, 500); // 持续时间必须与 CSS 动画的持续时间相匹配。
+    }
+
     /**
      * 从一个元素中获取纯净的文本内容，自动移除所有由Yummy添加的UI组件。
      * 这是为了确保在后续处理（如生成提示词）时，不会把 "😋" 或 "📚" 这类UI文本也包含进去。
@@ -316,193 +327,130 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         return `yummy-id-${Math.abs(hash)}`;
     }
 
+    // vNext: 修复函数作用域BUG，将此函数移到外部
+    const getTextWithHighlight = (element) => {
+        if (!element) return '';
+        const clone = element.cloneNode(true);
+        clone.querySelectorAll('.yummy-rating-bar, .yummy-control-panel, #yummy-quick-highlight-button, #yummy-collection-panel').forEach(ui => ui.remove());
+        return clone.textContent.trim();
+    };
 
-    // --- Prompt Generation Logic ---
-    function collectMarkedData(scopeElement = document.body) {
-        const uniqueText = (selector, minLength = 0, maxLength = Infinity) => {
-            const elements = scopeElement.querySelectorAll(selector);
-            const texts = new Set();
-            elements.forEach(el => {
-                const text = getCleanText(el);
-                if (text.length >= minLength && text.length <= maxLength) {
-                    texts.add(text);
-                }
-            });
-            return Array.from(texts).filter(Boolean);
-        };
+    // vNext: 清理不再使用的旧函数 (buildPrompt, collectMarkedData, generateAndApplyPrompt)
 
-        const KEYWORD_MAX_LENGTH = 15; // A a threshold to separate keywords from sentences.
-
-        // Likes are always full paragraphs/blocks
-        const likedParagraphs = uniqueText('.yummy-liked');
-        // All highlights
-        const allHighlights = uniqueText('.yummy-selection-highlight');
-        // Dislikes for avoidance
-        const dislikes = uniqueText('.yummy-disliked');
-
-        // Segregate highlights into sentences and keywords
-        const highlightedSentences = allHighlights.filter(t => t.length > KEYWORD_MAX_LENGTH);
-        const highlightedKeywords = allHighlights.filter(t => t.length <= KEYWORD_MAX_LENGTH);
-
-        logger.info('收集到的数据:', {
-            likedParagraphs,
-            highlightedSentences,
-            highlightedKeywords,
-            dislikes
+    // vNext: 全新的聚合 Prompt 生成逻辑
+    function generateAggregatePrompt(scopeElement) {
+        // 1. 收集数据
+        const likedItems = new Set();
+        scopeElement.querySelectorAll('.yummy-liked').forEach(el => {
+            // 使用更温和的 getTextWithHighlight 来确保句子不会被挖掉
+            const text = getTextWithHighlight(el);
+            if (text) likedItems.add(text);
         });
 
-        return {
-            likedParagraphs,
-            highlightedSentences,
-            highlightedKeywords,
-            dislikes
-        };
-    }
+        const dislikedItems = new Set();
+        scopeElement.querySelectorAll('.yummy-disliked').forEach(el => {
+            const text = getTextWithHighlight(el);
+            if (text) dislikedItems.add(text);
+        });
 
-    function buildPrompt(mode, data) {
-        const {
-            likedParagraphs,
-            highlightedSentences,
-            highlightedKeywords,
-            dislikes
-        } = data;
+        // 2. 构建 Prompt
         let prompt = '';
+        // vNext: 修复选区计算BUG，使用单一换行符确保长度计算一致
+        const likedText = Array.from(likedItems).join('\n');
+        const dislikedText = Array.from(dislikedItems).join('\n');
 
-        if (mode === 'organize') {
-            const coreParagraphsText = likedParagraphs.length > 0 ?
-                `### 核心段落\n${likedParagraphs.join('\n\n')}` :
-                '';
-
-            const keySentencesText = highlightedSentences.length > 0 ?
-                `### 关键句\n${highlightedSentences.join('\n')}` :
-                '';
-
-            const keywordsText = highlightedKeywords.length > 0 ?
-                `### 关键词\n${highlightedKeywords.join('\n')}` :
-                '';
-
-            const materials = [coreParagraphsText, keySentencesText, keywordsText].filter(Boolean).join('\n\n');
-
-            prompt = `你是一位专业的文书助理。你的任务是根据我提供的三类素材（核心段落、关键句、关键词），将它们重新整理成一份干净、结构化的文档。
-
-**整理规则：**
-1.  **核心段落处理**：将【核心段落】部分的内容**完全原封不动**地复制下来，保持它们之间的原有顺序和段落格式。
-2.  **关键句处理**：将【关键句】部分的内容，以无序列表（即在每一句前加上 \`- \`）的形式一一列出。
-3.  **关键词处理**：将【关键词】部分的所有词语，用逗号（\`， \`）连接，形成单行索引。
-4.  **最终输出格式**：
-    *   严格按照"核心段落"、"关键句"、"关键词"的顺序组合你的输出。
-    *   如果同时存在多个部分，在不同部分之间用一个水平分割线 (\`---\`) 隔开。
-    *   你的回答中**绝对不能出现**"### 核心段落"、"### 关键句"、"### 关键词"这些分类标题，也**绝对不能包含**任何我在这里给你的、在"整理规则"下的指示性文字。你的回答应该直接从第一个核心段落的内容开始，或者从第一条关键句开始。
-
----
-**【素材】**
-
-${materials}
----`;
-
-        } else if (mode === 'diverge') {
-            const inspiration = [...likedParagraphs, ...highlightedSentences, ...highlightedKeywords];
-            const inspirationText = inspiration.length > 0 ?
-                `- ${inspiration.join('\n- ')}` :
-                '无';
-
-            const avoidanceText = dislikes.length > 0 ?
-                `- ${dislikes.join('\n- ')}` :
-                '无';
-
-            prompt = `请基于我标记为"喜欢"和"高亮"的内容，进行自由的发散创作，帮我探索一些新的可能性。
-
-**灵感来源 (我喜欢的内容):**
----
-${inspirationText}
----
-
-**创作禁区 (我不喜欢的内容，请务必规避):**
----
-${avoidanceText}
----
-
-**关键要求：**
-1. **主题相关**：你的创作可以天马行空，但必须与"灵感来源"的主题保持相关性。
-2. **严格规避**：在任何情况下，都绝对不能在你的回答中提及、暗示或包含任何"创作禁区"里的内容。
-3. **自由发挥**：请大胆地进行联想、引申和创造。`;
+        if (likedText) {
+            prompt += `在你刚刚生成的内容中，我喜欢的语句有：\n${likedText}\n\n`;
         }
-        return prompt.trim();
+
+        if (dislikedText) {
+            prompt += `我不喜欢的语句有：\n${dislikedText}\n\n`;
+        }
+
+        // 如果什么都没收集到，则返回 null
+        if (!prompt) {
+            return null;
+        }
+
+        // 3. 添加预设的 instruction
+        const presetInstruction = "请你根据我所标记的上述内容进行拓展延伸";
+        prompt += presetInstruction;
+        
+        return { prompt, instructionLength: presetInstruction.length };
     }
 
-    function generateAndApplyPrompt(mode, event) {
-        const isGlobal = event.shiftKey;
-        const scope = isGlobal ?
-            document.body :
-            Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).pop()?.closest('.group\\/turn-messages'); // v0.5.6 修复: ChatGPT 更新了 turn 容器的类名
-
-        if (!scope) {
-            alert('Yummy错误：\n找不到任何AI回复内容可供处理。');
-            logger.error('找不到AI回复区块。');
-            return;
-        }
-
-        const data = collectMarkedData(scope);
-
-        if (data.likedParagraphs.length === 0 && data.highlightedSentences.length === 0 && data.highlightedKeywords.length === 0) {
-            const message = isGlobal ?
-                'Yummy提示：\n在整个页面中没有找到任何"喜欢"或高亮的内容。' :
-                'Yummy提示：\n在最新的AI回复中没有找到任何"喜欢"或高亮的内容。\n\n（小技巧：按住Shift再点击，可以处理整个页面的内容）';
-            alert(message);
-            return;
-        }
-
-        const prompt = buildPrompt(mode, data);
-        const inputBox = document.querySelector('#prompt-textarea');
-
+    // vNext: 全新的注入和选中逻辑
+    function injectAndSelectPrompt({ prompt, instructionLength }) {
+        const inputBox = document.querySelector('div#prompt-textarea'); // 明确指定是 div
         if (!inputBox) {
-            alert('Yummy错误：\n找不到输入框！无法粘贴提示词。');
-            logger.error('找不到输入框 (#prompt-textarea)');
+            alert('Yummy错误：\n找不到输入框！');
             return;
         }
 
-        inputBox.focus();
+        // 1. 注入文本到 contenteditable div 的 <p> 标签中
         let p = inputBox.querySelector('p');
-
         if (!p) {
             p = document.createElement('p');
             inputBox.innerHTML = '';
             inputBox.appendChild(p);
         }
-
         p.innerText = prompt;
-
         if (p.classList.contains('placeholder')) {
             p.classList.remove('placeholder');
         }
-        if (p.hasAttribute('data-placeholder')) {
-            p.removeAttribute('data-placeholder');
-        }
 
-        inputBox.dispatchEvent(new Event('input', {
-            bubbles: true
-        }));
+        // 手动触发 input 事件，告知 ChatGPT 输入框内容已改变
+        inputBox.dispatchEvent(new Event('input', { bubbles: true }));
+        inputBox.focus();
 
+        // 2. vNext: 使用 Range 和 Selection API 来创建选区
+        // 使用 setTimeout 确保在浏览器渲染和处理完 value 之后再设置选区
+        setTimeout(() => {
+           const selection = window.getSelection();
+           if (!selection) return;
+
+           const paragraph = document.querySelector('div#prompt-textarea p');
+           if (paragraph && paragraph.lastChild && paragraph.lastChild.nodeType === Node.TEXT_NODE) {
+               const lastTextNode = paragraph.lastChild;
+               const textContent = lastTextNode.textContent || '';
+               
+               // 指令应该就在这个最后文本节点的末尾
+               const selectionStart = textContent.length - instructionLength;
+
+               if (selectionStart >= 0) {
+                   const range = document.createRange();
+                   range.setStart(lastTextNode, selectionStart);
+                   range.setEnd(lastTextNode, textContent.length);
+    
+                   selection.removeAllRanges();
+                   selection.addRange(range);
+               } else {
+                   logger.warn(`无法设置选区，指令长度(${instructionLength})大于最后文本节点长度(${textContent.length})`);
+               }
+               
+               const scrollContainer = inputBox.closest('[class*="overflow-auto"]');
+               if (scrollContainer) {
+                    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+               }
+            } else {
+                 logger.warn('无法设置选区，找不到预期的最后一个文本节点。');
+            }
+         }, 10);
+
+        // 3. 检查并触发自动发送
         if (isAutoSendActive) {
             setTimeout(() => {
-                let sendButton = inputBox.closest('form')?.querySelector('button:not(:disabled)[data-testid*="send"], button:not(:disabled)[class*="send"]');
-
-                if (!sendButton) {
-                    sendButton = document.querySelector('button[data-testid="send-button"]:not(:disabled)');
-                }
-
+                // vNext: 从 document 级别查找发送按钮，更稳健
+                let sendButton = document.querySelector('button[data-testid*="send"]:not(:disabled), button[class*="send"]:not(:disabled)');
                 if (sendButton) {
                     sendButton.click();
-                    logger.info('已自动发送提示词。');
                 } else {
-                    alert('Yummy警告：\n已粘贴提示词，但找不到发送按钮或按钮不可用，请手动发送。');
-                    logger.warn('找不到发送按钮或按钮被禁用。');
+                    logger.warn('自动发送失败：找不到发送按钮。');
                 }
             }, 200);
-        } else {
-            logger.info('已粘贴提示词，未自动发送。');
         }
     }
+
 
     // --- UI与交互逻辑 ---
     // vNext: 重写 Toast 逻辑，以支持两种定位模式
@@ -818,14 +766,6 @@ ${avoidanceText}
             }
         };
 
-        // 定义一个特殊的文本提取器，它只移除UI控件，但保留高亮
-        const getTextWithHighlight = (element) => {
-            if (!element) return '';
-            const clone = element.cloneNode(true);
-            clone.querySelectorAll('.yummy-rating-bar, .yummy-control-panel, #yummy-quick-highlight-button, #yummy-collection-panel').forEach(ui => ui.remove());
-            return clone.textContent.trim();
-        };
-
         // 第一步：收集所有 'liked' 的元素 (整体)
         document.querySelectorAll('.yummy-liked:not(.yummy-selection-highlight)').forEach(el => {
             // 确保我们处理的是最顶层的 liked 块，避免一个块内的 P 和外层 DIV 都被收集
@@ -1063,32 +1003,77 @@ ${avoidanceText}
         collectionToggleButton.title = '打开/关闭收集面板';
 
         const separator1 = document.createElement('hr');
+        
+        // vNext: 废除“整理”和“发散”模式，替换为“聚合”按钮
+        const aggregateBtn = document.createElement('button');
+        aggregateBtn.className = 'yummy-control-button';
+        aggregateBtn.id = 'yummy-aggregate-btn';
+        aggregateBtn.textContent = '✨';
+        aggregateBtn.title = '聚合评价 (单击: 最新, Shift+单击: 全部)';
+        aggregateBtn.addEventListener('click', (e) => {
+            const isGlobal = e.shiftKey;
+            const scope = isGlobal ?
+                document.body :
+                Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).pop()?.closest('.group\\/turn-messages');
 
-        const organizeBtn = document.createElement('button');
-        organizeBtn.className = 'yummy-control-button';
-        organizeBtn.id = 'yummy-organize-btn';
-        organizeBtn.textContent = '📝';
-        organizeBtn.title = '整理模式 (单击: 最新, Shift+单击: 全部)';
-        organizeBtn.addEventListener('click', (e) => generateAndApplyPrompt('organize', e));
+            if (!scope) {
+                alert('Yummy错误：\n找不到任何AI回复内容可供处理。');
+                return;
+            }
 
-        const divergeBtn = document.createElement('button');
-        divergeBtn.className = 'yummy-control-button';
-        divergeBtn.id = 'yummy-diverge-btn';
-        divergeBtn.textContent = '💡';
-        divergeBtn.title = '发散模式 (单击: 最新, Shift+单击: 全部)';
-        divergeBtn.addEventListener('click', (e) => generateAndApplyPrompt('diverge', e));
+            const result = generateAggregatePrompt(scope);
+
+            if (!result) {
+                const message = isGlobal ?
+                    'Yummy提示：\n在整个页面中没有找到任何"喜欢"或"不喜欢"的内容。' :
+                    'Yummy提示：\n在最新的AI回复中没有找到任何"喜欢"或"不喜欢"的内容。\n\n（小技巧：按住Shift再点击，可以处理整个页面的内容）';
+                alert(message);
+                return;
+            }
+
+            // vNext: 调用新的注入函数
+            injectAndSelectPrompt(result);
+        });
 
         const separator2 = document.createElement('hr');
 
         const autoSendBtn = document.createElement('button');
-        autoSendBtn.className = 'yummy-control-button active';
+        // vNext: 默认关闭自动发送
+        autoSendBtn.className = 'yummy-control-button';
         autoSendBtn.id = 'yummy-autosend-btn';
         autoSendBtn.textContent = '🚀';
-        autoSendBtn.title = '自动发送已开启，点击关闭';
+        autoSendBtn.title = '自动发送已关闭，点击开启'; // vNext: 更新默认 title
         autoSendBtn.addEventListener('click', () => {
             isAutoSendActive = !isAutoSendActive;
             autoSendBtn.classList.toggle('active', isAutoSendActive);
             autoSendBtn.title = isAutoSendActive ? '自动发送已开启，点击关闭' : '自动发送已关闭，点击开启';
+        });
+
+        // vNext: 重构自动发送提示气泡
+        const autoSendTooltip = document.createElement('div');
+        autoSendTooltip.id = 'yummy-autosend-tooltip';
+        autoSendTooltip.innerHTML = `点击可开启自动发送，为您节省一步操作！<span class="yummy-tooltip-dismiss-link">不再提示</span>`;
+        autoSendBtn.appendChild(autoSendTooltip);
+
+        const dismissLink = autoSendTooltip.querySelector('.yummy-tooltip-dismiss-link');
+
+        // 检查是否需要显示提示
+        if (localStorage.getItem('yummyAutoSendTooltipDismissed') !== 'true') {
+            setTimeout(() => {
+                autoSendTooltip.classList.add('visible');
+            }, 1000); 
+        }
+
+        // 单击气泡任意位置 -> 临时关闭
+        autoSendTooltip.addEventListener('click', () => {
+            autoSendTooltip.classList.remove('visible');
+        });
+
+        // 单击“不再提示”链接 -> 永久关闭
+        dismissLink.addEventListener('click', (e) => {
+            e.stopPropagation(); // 关键：阻止事件冒泡到父元素(autoSendTooltip)的点击事件
+            autoSendTooltip.classList.remove('visible');
+            localStorage.setItem('yummyAutoSendTooltipDismissed', 'true');
         });
 
         const separator3 = document.createElement('hr');
@@ -1107,8 +1092,7 @@ ${avoidanceText}
         controlPanel.appendChild(selectionModeButton);
         controlPanel.appendChild(collectionToggleButton);
         controlPanel.appendChild(separator1);
-        controlPanel.appendChild(organizeBtn);
-        controlPanel.appendChild(divergeBtn);
+        controlPanel.appendChild(aggregateBtn);
         controlPanel.appendChild(separator2);
         controlPanel.appendChild(autoSendBtn);
         controlPanel.appendChild(separator3);
@@ -1446,15 +1430,4 @@ function getSubsequentSiblings(startElement) {
 
     // 6. 返回收集到的所有元素。
     return results;
-}
-
-/**
- * 为一个元素添加闪烁效果的CSS类，并在动画结束后移除它。
- * @param {HTMLElement} element - 需要闪烁的元素。
- */
-function flashElement(element) {
-    element.classList.add('yummy-flash');
-    setTimeout(() => {
-        element.classList.remove('yummy-flash');
-    }, 500); // 持续时间必须与 CSS 动画的持续时间相匹配。
 }

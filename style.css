@@ -267,6 +267,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative; /* vNext: 为提示气泡提供定位上下文 */
 }
 
 .yummy-control-button:hover {
@@ -280,6 +281,66 @@
     border-color: #4CAF50;
     box-shadow: 0 0 10px #4CAF50;
 }
+
+/* vNext: 重构自动发送提示气泡的样式 */
+#yummy-autosend-tooltip {
+    position: absolute;
+    /* vNext: 定位在按钮左侧 */
+    right: 110%; 
+    top: 50%;
+    transform: translateY(-50%);
+    
+    width: 200px;
+    background-color: #333;
+    color: #fff;
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.5;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    cursor: pointer; /* vNext: 整个气泡可点击 */
+    
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.3s, transform 0.3s;
+    
+    /* vNext: 初始状态稍微向右偏移，实现左移进入效果 */
+    transform: translate(5px, -50%);
+}
+
+#yummy-autosend-tooltip.visible {
+    visibility: visible;
+    opacity: 1;
+    transform: translate(0, -50%);
+}
+
+/* vNext: 气泡右侧的小箭头 */
+#yummy-autosend-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 100%; /* vNext: 箭头在右侧 */
+    margin-top: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: transparent transparent transparent #333; /* vNext: 箭头指向右 */
+}
+
+/* vNext: 为“不再提示”的链接添加样式 */
+.yummy-tooltip-dismiss-link {
+    text-decoration: underline;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 11px;
+    margin-top: 8px;
+    display: block;
+    text-align: right;
+}
+
+.yummy-tooltip-dismiss-link:hover {
+    color: #fff;
+}
+
 
 /* --- Selection Highlight & Popups --- */
 /* 
