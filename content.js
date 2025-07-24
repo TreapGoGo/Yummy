@@ -42,6 +42,10 @@ logger.info('Yummy! 内容脚本已加载。');
 const EMOJI_LIKE = '😋';
 const EMOJI_DISLIKE = '🤮';
 
+// v0.5.8 修复作用域问题：在全局作用域中声明一个占位符函数。
+// 真正的实现将在下面的 IIFE 中被赋予，从而解决 ReferenceError。
+let syncCollectionPanelWithDOM = () => logger.warn('syncCollectionPanelWithDOM not implemented yet');
+
 // --- 功能模块 1: 评价栏系统 ---
 
 /**
@@ -67,6 +71,9 @@ function applyHierarchicalState(targetElement, state) {
         descendants.forEach(d => d.classList.add('yummy-disliked'));
     }
     logger.debug(`已将状态 '${state}' 应用到元素及其子项。`, targetElement);
+
+    // v0.5.8 修复：将同步逻辑统一到这里，确保任何状态变更都会触发UI更新。
+    syncCollectionPanelWithDOM();
 }
 
 /**
@@ -584,6 +591,8 @@ ${avoidanceText}
         } finally {
             if (selection.rangeCount > 0) selection.removeAllRanges();
         }
+        // v0.5.7 新增：高亮操作后自动同步
+        syncCollectionPanelWithDOM();
     }
 
     function mergeWithExistingHighlights(newRange) {
@@ -614,6 +623,8 @@ ${avoidanceText}
         parent.removeChild(element);
         parent.normalize(); // Merge adjacent text nodes
         logger.info('高亮已移除。');
+        // v0.5.7 新增：取消高亮后自动同步
+        syncCollectionPanelWithDOM();
     }
 
     function handleTextSelection(event) {
@@ -636,10 +647,11 @@ ${avoidanceText}
         }
 
         lastSelectionRange = range.cloneRange();
-        const rect = range.getBoundingClientRect();
+        // v0.5.8 修复：快捷高亮按钮的位置现在基于鼠标指针的坐标(event.clientX/Y)，
+        // 而不是基于选区的边界矩形(getBoundingClientRect)，以确保按钮始终出现在光标附近。
         quickHighlightButton.style.display = 'flex';
-        quickHighlightButton.style.left = `${rect.right + 5}px`;
-        quickHighlightButton.style.top = `${rect.bottom + 5}px`;
+        quickHighlightButton.style.left = `${event.clientX + 5}px`;
+        quickHighlightButton.style.top = `${event.clientY + 5}px`;
     }
 
     function closeActiveContextMenu() {
@@ -724,15 +736,24 @@ ${avoidanceText}
         menu.style.left = `${x}px`;
     }
 
-    function collectHighlights() {
+    /**
+     * v0.5.7 核心重构:
+     * 将原有的手动 collectHighlights 函数重构为自动同步函数。
+     * 此函数负责扫描整个 DOM，获取所有“喜欢”和“高亮”的内容，
+     * 并用这些内容完全替换掉收集面板中的条目，确保实时同步。
+     */
+    // v0.5.8 修复作用域问题：将此函数赋值给全局占位符，以便 applyHierarchicalState 可以调用它。
+    syncCollectionPanelWithDOM = function() {
         if (!collectionContent) return;
-        collectionContent.innerHTML = ''; // 清空现有列表
+        collectionContent.innerHTML = ''; // 清空现有列表，实现“替换”而非“追加”
 
         const uniqueContent = new Set();
 
+        // 查找所有“喜欢”和“高亮”的元素
         const likedItems = document.querySelectorAll('.yummy-liked');
         const highlightedItems = document.querySelectorAll('.yummy-selection-highlight');
 
+        // 将元素的纯净文本添加到 Set 中以自动去重
         likedItems.forEach(item => {
             const text = getCleanText(item);
             if (text) uniqueContent.add(text);
@@ -741,23 +762,14 @@ ${avoidanceText}
             const text = getCleanText(item);
             if (text) uniqueContent.add(text);
         });
-
+        
+        // 将去重后的内容重新添加到收集面板
         if (uniqueContent.size > 0) {
             uniqueContent.forEach(text => {
                 if (text) addItemToCollection(text);
             });
-            logger.info(`${uniqueContent.size}个条目已收集。`);
-            showToast(`${uniqueContent.size}个条目已收集`, {
-                clientX: window.innerWidth - 250,
-                clientY: 50
-            });
-        } else {
-            logger.info('没有找到可供收集的内容。');
-            showToast('未找到"喜欢"或高亮内容', {
-                clientX: window.innerWidth - 250,
-                clientY: 50
-            });
         }
+        logger.info(`收集面板已自动同步，共 ${uniqueContent.size} 个条目。`);
     }
 
     function addItemToCollection(text) {
@@ -812,12 +824,6 @@ ${avoidanceText}
         collectionToggleButton.innerHTML = '📚';
         collectionToggleButton.title = '打开/关闭收集面板';
 
-        const collectButton = document.createElement('button');
-        collectButton.id = 'yummy-collect-button';
-        collectButton.className = 'yummy-control-button';
-        collectButton.innerHTML = '📥';
-        collectButton.title = '收集所有"喜欢"和高亮的内容';
-
         const separator1 = document.createElement('hr');
 
         const organizeBtn = document.createElement('button');
@@ -862,7 +868,6 @@ ${avoidanceText}
 
         controlPanel.appendChild(selectionModeButton);
         controlPanel.appendChild(collectionToggleButton);
-        controlPanel.appendChild(collectButton);
         controlPanel.appendChild(separator1);
         controlPanel.appendChild(organizeBtn);
         controlPanel.appendChild(divergeBtn);
@@ -913,11 +918,6 @@ ${avoidanceText}
 
         collectionToggleButton.addEventListener('click', () => {
             collectionPanel.classList.toggle('visible');
-        });
-
-        collectButton.addEventListener('click', () => {
-            collectHighlights();
-            collectionPanel.classList.add('visible');
         });
 
         collectionPinBtn.addEventListener('click', (e) => {
