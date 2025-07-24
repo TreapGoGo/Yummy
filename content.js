@@ -12,263 +12,190 @@
   此脚本通过 MutationObserver 监听页面的动态变化，确保功能对流式输出的内容同样有效。
 */
 
-
-// --- 初始化与环境检查 ---
-
-// 通过检查 `update_url` (一个只在发布版 manifest.json 中存在的字段) 来判断扩展是否处于本地解压的开发模式。
-// 这是一个非常巧妙且无侵入性的环境判断方法。
-const isDevMode = !('update_url' in chrome.runtime.getManifest());
-
-if (!isDevMode) {
-    // 如果是生产环境（例如从 Chrome 网上应用店安装），则用一个"空壳"对象替换全局的 logger。
-    // 这个"空壳"对象拥有与真实 logger 完全相同的接口（方法名），但所有方法都是空函数，什么也不做。
-    // 这样做的好处是：
-    // 1.  **性能优化**：在生产环境中，所有日志记录相关的开销（包括创建日志面板的DOM操作）都被完全移除。
-    // 2.  **代码整洁**：业务逻辑代码中无需遍布 `if (isDevMode)` 的检查，可以直接调用 logger 的方法，实现了开发与生产的无缝切换。
-    window.logger = {
-        log: () => { },
-        info: () => { },
-        warn: () => { },
-        error: () => { },
-        debug: () => { },
-        group: () => { },
-        groupEnd: () => { },
-        init: () => { }
-    };
-}
-
-logger.info('Yummy! 内容脚本已加载。');
-
-const EMOJI_LIKE = '😋';
-const EMOJI_DISLIKE = '🤮';
-
-// v0.5.8 修复作用域问题：在全局作用域中声明一个占位符函数。
-// 真正的实现将在下面的 IIFE 中被赋予，从而解决 ReferenceError。
-let syncCollectionPanelWithDOM = () => logger.warn('syncCollectionPanelWithDOM not implemented yet');
-
-// --- 功能模块 1: 评价栏系统 ---
-
-/**
- * 为目标元素及其所有后代文本节点应用"喜欢"或"不喜欢"的状态。
- * @param {HTMLElement} targetElement - 需要应用状态的顶层元素。
- * @param {'liked' | 'disliked' | 'none'} state - 需要应用的状态。
- */
-function applyHierarchicalState(targetElement, state) {
-    // 定义需要被统一应用状态的后代元素选择器。
-    const descendantSelector = 'p, h1, h2, h3, h4, h5, h6, li';
-    // 首先清理目标元素自身可能存在的旧状态。
-    targetElement.classList.remove('yummy-liked', 'yummy-disliked');
-    // 然后清理其所有后代元素可能存在的旧状态。
-    const descendants = targetElement.querySelectorAll(descendantSelector);
-    descendants.forEach(d => d.classList.remove('yummy-liked', 'yummy-disliked'));
-
-    // 根据新状态，为目标元素及其所有后代添加对应的 CSS 类。
-    if (state === 'liked') {
-        targetElement.classList.add('yummy-liked');
-        descendants.forEach(d => d.classList.add('yummy-liked'));
-    } else if (state === 'disliked') {
-        targetElement.classList.add('yummy-disliked');
-        descendants.forEach(d => d.classList.add('yummy-disliked'));
-    }
-    logger.debug(`已将状态 '${state}' 应用到元素及其子项。`, targetElement);
-
-    // v0.5.8 修复：将同步逻辑统一到这里，确保任何状态变更都会触发UI更新。
-    syncCollectionPanelWithDOM();
-}
-
-/**
- * 为指定的页面元素动态创建并注入一个评价栏。
- * 这是整个评价功能的核心入口。
- * @param {HTMLElement} element - 需要添加评价栏的原始页面元素 (如 <p>, <h1>)。
- */
-function addRatingBar(element) {
-    // 防御性检查：通过在元素上设置一个自定义数据属性 `data-yummy-processed` 作为标记，
-    // 防止同一个元素被重复处理，这在 MutationObserver 的回调中尤为重要。
-    if (element.dataset.yummyProcessed) return;
-    element.dataset.yummyProcessed = 'true';
-
-    // **核心设计：包裹容器 (Wrapper Div)**
-    // 创建一个 <div> 容器，并将原始的 `element` 包裹进去。
-    // 这个容器是实现交互的关键，其目的在 style.css 中有详细解释。
-    // v0.4.4 版本中，这个包裹逻辑是所有列表（<li>）排版问题的根源，因为它没有考虑到
-    // <li> 元素的父子结构约束，即 <ul> 的直接子元素不能是 <div>。
-    const container = document.createElement('div');
-    container.className = 'yummy-paragraph-container';
-    element.parentNode.insertBefore(container, element);
-    container.appendChild(element);
-
-    const ratingBar = document.createElement('div');
-    ratingBar.className = 'yummy-rating-bar';
-
-    // --- 新增：绝对水平对齐逻辑 (v0.4.6) ---
-    // 为了解决列表缩进导致评价栏错位的问题，我们采用JS动态计算其绝对水平位置。
-    // 1. 找到一个稳定的、所有评价栏共有的祖先容器作为基准（这里是'.group/conversation-turn'）。
-    // 2. 计算当前元素容器（.yummy-paragraph-container）相对于基准容器的水平偏移量（即缩进量）。
-    // 3. 从预设的左偏移（-85px）中减去这个缩进量，得到新的left值。
-    // 这样，无论元素（如<li>）缩进了多少，其评价栏的最终绝对位置都会被校正到同一垂直线上，实现精准对齐。
-    const turnContainer = element.closest('.group\\/turn-messages'); // v0.5.6 修复: ChatGPT 更新了 turn 容器的类名
-    if (turnContainer) {
-        const turnContainerRect = turnContainer.getBoundingClientRect();
-        // `container` 就是 .yummy-paragraph-container
-        const containerRect = container.getBoundingClientRect(); 
-        const indentation = containerRect.left - turnContainerRect.left;
-        const baseLeftOffset = -85; // 这个值必须与 style.css 中的 `padding-left` 和 `margin-left` 联动
-        
-        ratingBar.style.left = `${baseLeftOffset - indentation}px`;
-    }
-
-    const likeButton = document.createElement('span');
-    likeButton.className = 'yummy-rating-button';
-    likeButton.textContent = EMOJI_LIKE;
-    likeButton.title = '想吃 (Like)';
-    likeButton.addEventListener('click', (e) => {
-        // 阻止事件冒泡，防止意外触发更上层元素的点击事件。
-        e.stopPropagation();
-        // 判断当前元素是否为标题（父级元素）。
-        const isParent = /H[1-6]/.test(element.tagName);
-        if (isParent) {
-            // 如果是标题，则走复杂的分级评价逻辑。
-            handleParentRating(element, 'liked');
-        } else {
-            // 如果是普通元素，则走简单的切换逻辑。
-            const isAlreadyLiked = element.classList.contains('yummy-liked');
-            applyHierarchicalState(element, isAlreadyLiked ? 'none' : 'liked');
-        }
-    });
-
-    const dislikeButton = document.createElement('span');
-    dislikeButton.className = 'yummy-rating-button';
-    dislikeButton.textContent = EMOJI_DISLIKE;
-    dislikeButton.title = '想吐 (Dislike)';
-    dislikeButton.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isParent = /H[1-6]/.test(element.tagName);
-        if (isParent) {
-            handleParentRating(element, 'disliked');
-        } else {
-            const isAlreadyDisliked = element.classList.contains('yummy-disliked');
-            applyHierarchicalState(element, isAlreadyDisliked ? 'none' : 'disliked');
-        }
-    });
-
-    ratingBar.appendChild(likeButton);
-    ratingBar.appendChild(dislikeButton);
-    container.appendChild(ratingBar);
-}
-
-// 定义一个全局的选择器，用于匹配所有需要添加评价栏的目标元素。
-const CONTENT_ELEMENTS_SELECTOR = `[data-message-author-role="assistant"] h1, [data-message-author-role="assistant"] h2, [data-message-author-role="assistant"] h3, [data-message-author-role="assistant"] h4, [data-message-author-role="assistant"] h5, [data-message-author-role="assistant"] h6, [data-message-author-role="assistant"] p, [data-message-author-role="assistant"] pre, [data-message-author-role="assistant"] li, [data-message-author-role="assistant"] table`;
-
-/**
- * 扫描整个文档，为所有符合条件的新元素添加评价栏。
- */
-function processNewElements() {
-    document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR).forEach(element => {
-        // 利用 `data-yummy-processed` 标记来避免重复处理。
-        if (!element.dataset.yummyProcessed) addRatingBar(element);
-    });
-    // v0.5.12 修复：在DOM变化稳定后（即ChatGPT停止打字后）自动同步一次。
-    // 这可以确保即使用户在文本生成过程中点击了“喜欢”，最终同步的也是完整的段落。
-    syncCollectionPanelWithDOM();
-}
-
-// 使用 Map 数据结构来存储每个父级元素（标题）的评价状态。
-// Key 是 HTMLElement 对象，Value 是一个记录了评价类型和点击等级的状态对象。
-// 相比于在元素上直接附加属性，使用 Map 更干净、更安全，不会污染 DOM。
-const parentClickState = new Map();
-
-/**
- * 处理对父级元素（特指标题 h1-h6）的评价逻辑。
- * 这是一个有状态的、分两级的复杂交互。
- * @param {HTMLElement} parentElement - 被点击的标题元素。
- * @param {'liked' | 'disliked'} newRating - 本次点击的评价类型。
- */
-function handleParentRating(parentElement, newRating) {
-    // 获取或初始化当前标题的状态。
-    const state = parentClickState.get(parentElement) || {
-        rating: 'none', // 'none', 'liked', 'disliked'
-        level: 0        // 0: 初始, 1: 仅评价父级, 2: 评价整个块
-    };
-    // 获取该标题下的所有后续内容块。
-    const children = getSubsequentSiblings(parentElement);
-
-    // 情况一：重复点击同一个评价按钮（例如，连续点两次"喜欢"）
-    if (newRating === state.rating) {
-        if (state.level === 1) {
-            // **第二次点击：** 从"仅评价标题"升级为"评价整个块"。
-            state.level = 2;
-            children.forEach(child => applyHierarchicalState(child, newRating));
-            logger.debug(`块状评价 (二次点击): ${newRating}`, parentElement);
-        } else { // level is 2 or 0
-            // **第三次点击（或从初始状态的第二次无效点击）：** 取消所有评价。
-            state.rating = 'none';
-            state.level = 0;
-            applyHierarchicalState(parentElement, 'none');
-            children.forEach(child => applyHierarchicalState(child, 'none'));
-            logger.debug(`块状评价 (取消): none`, parentElement);
-        }
-    }
-    // 情况二：点击了不同的评价按钮（例如，从"喜欢"切换到"不喜欢"）
-    else {
-        if (state.level === 2) {
-            // 如果之前已经对整个块进行了评价，则直接"翻转"整个块的评价。
-            state.rating = newRating;
-            // level 保持为 2
-            applyHierarchicalState(parentElement, newRating);
-            children.forEach(child => applyHierarchicalState(child, newRating));
-            logger.debug(`块状评价 (翻转): ${newRating}`, parentElement);
-        }
-        else {
-            // **首次点击：**
-            // 1. 设置新的评价类型和等级1。
-            state.rating = newRating;
-            state.level = 1;
-            // 2. 清理所有旧状态，确保一个干净的开始。
-            applyHierarchicalState(parentElement, 'none');
-            children.forEach(child => applyHierarchicalState(child, 'none'));
-            // 3. 应用新状态到父级元素。
-            applyHierarchicalState(parentElement, newRating);
-            // 4. "闪烁"所有子元素，提示用户它们是受影响的范围。
-            children.forEach(child => flashElement(child));
-            logger.debug(`块状评价 (首次点击): ${newRating}`, parentElement);
-        }
-    }
-
-    // 更新该标题的状态到 Map 中。
-    parentClickState.set(parentElement, state);
-}
-
-// --- 动态内容处理 ---
-
-let debounceTimer = null;
-/**
- * 一个简单的防抖（debounce）函数。
- * 目的是在短时间内页面发生大量变化时（如流式输出），不要过于频繁地执行 `processNewElements`，
- * 而是等待一个短暂的稳定期（500毫秒）后再执行，以提升性能。
- */
-const debouncedProcessNewElements = () => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-        processNewElements();
-    }, 500);
-};
-
-// **核心的动态内容监听器**
-// MutationObserver 是现代浏览器提供的、用于观察 DOM 树变化的强大接口。
-// 它比过时的 MutationEvents 性能要好得多。
-const observer = new MutationObserver(debouncedProcessNewElements);
-
-
-// --- 功能模块 2 & 3: 选择、收集与提示词生成 (包裹在IIFE中以创建私有作用域) ---
-(function () {
-    // 'use strict'; 开启严格模式，是一种良好的编程实践。
+(function() {
     'use strict';
 
-    // --- 状态变量 ---
-    // 通过一系列的布尔值和对象引用来管理复杂UI的当前状态。
-    let isSelectionModeActive = false; // "划词模式"是否激活
-    let quickHighlightButton = null;   // 指向"快捷高亮"按钮的DOM引用
-    let lastSelectionRange = null;     // 保存用户上一次的文本选区
+    // 通过检查 `update_url` (一个只在发布版 manifest.json 中存在的字段) 来判断扩展是否处于本地解压的开发模式。
+    const isDevMode = !('update_url' in chrome.runtime.getManifest());
+
+    if (!isDevMode) {
+        window.logger = {
+            log: () => {},
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+            debug: () => {},
+            group: () => {},
+            groupEnd: () => {},
+            init: () => {}
+        };
+    }
+
+    logger.info('Yummy! 内容脚本已加载。');
+
+    const EMOJI_LIKE = '😋';
+    const EMOJI_DISLIKE = '🤮';
+
+    let syncCollectionPanelWithDOM = () => logger.warn('syncCollectionPanelWithDOM not implemented yet');
+
+    function applyHierarchicalState(targetElement, state) {
+        const descendantSelector = 'p, h1, h2, h3, h4, h5, h6, li';
+        targetElement.classList.remove('yummy-liked', 'yummy-disliked');
+        const descendants = targetElement.querySelectorAll(descendantSelector);
+        descendants.forEach(d => d.classList.remove('yummy-liked', 'yummy-disliked'));
+
+        if (state === 'liked') {
+            targetElement.classList.add('yummy-liked');
+            descendants.forEach(d => d.classList.add('yummy-liked'));
+        } else if (state === 'disliked') {
+            targetElement.classList.add('yummy-disliked');
+            descendants.forEach(d => d.classList.add('yummy-disliked'));
+        }
+        logger.debug(`已将状态 '${state}' 应用到元素及其子项。`, targetElement);
+        syncCollectionPanelWithDOM();
+    }
+
+    function addRatingBar(element) {
+        if (element.dataset.yummyProcessed) return;
+        element.dataset.yummyProcessed = 'true';
+
+        const container = document.createElement('div');
+        container.className = 'yummy-paragraph-container';
+        element.parentNode.insertBefore(container, element);
+        container.appendChild(element);
+
+        const ratingBar = document.createElement('div');
+        ratingBar.className = 'yummy-rating-bar';
+
+        const turnContainer = element.closest('.group\\/turn-messages');
+        if (turnContainer) {
+            const turnContainerRect = turnContainer.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
+            const indentation = containerRect.left - turnContainerRect.left;
+            const baseLeftOffset = -85;
+            ratingBar.style.left = `${baseLeftOffset - indentation}px`;
+        }
+
+        const likeButton = document.createElement('span');
+        likeButton.className = 'yummy-rating-button';
+        likeButton.textContent = EMOJI_LIKE;
+        likeButton.title = '想吃 (Like)';
+        likeButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isParent = /H[1-6]/.test(element.tagName);
+            if (isParent) {
+                handleParentRating(element, 'liked');
+            } else {
+                const isAlreadyLiked = element.classList.contains('yummy-liked');
+                applyHierarchicalState(element, isAlreadyLiked ? 'none' : 'liked');
+            }
+        });
+
+        const dislikeButton = document.createElement('span');
+        dislikeButton.className = 'yummy-rating-button';
+        dislikeButton.textContent = EMOJI_DISLIKE;
+        dislikeButton.title = '想吐 (Dislike)';
+        dislikeButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isParent = /H[1-6]/.test(element.tagName);
+            if (isParent) {
+                handleParentRating(element, 'disliked');
+            } else {
+                const isAlreadyDisliked = element.classList.contains('yummy-disliked');
+                applyHierarchicalState(element, isAlreadyDisliked ? 'none' : 'disliked');
+            }
+        });
+
+        ratingBar.appendChild(likeButton);
+        ratingBar.appendChild(dislikeButton);
+        container.appendChild(ratingBar);
+    }
+
+    const CONTENT_ELEMENTS_SELECTOR = `[data-message-author-role="assistant"] h1, [data-message-author-role="assistant"] h2, [data-message-author-role="assistant"] h3, [data-message-author-role="assistant"] h4, [data-message-author-role="assistant"] h5, [data-message-author-role="assistant"] h6, [data-message-author-role="assistant"] p, [data-message-author-role="assistant"] pre, [data-message-author-role="assistant"] li, [data-message-author-role="assistant"] table`;
+
+    function processNewElements() {
+        document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR).forEach(element => {
+            if (!element.dataset.yummyProcessed) addRatingBar(element);
+        });
+        syncCollectionPanelWithDOM();
+    }
+
+    const parentClickState = new Map();
+
+    function getSubsequentSiblings(startElement) {
+        const results = [];
+        if (!startElement) {
+            return results;
+        }
+        let nextElement = startElement.nextElementSibling;
+        const startTag = startElement.tagName;
+        const startLevel = parseInt(startTag.substring(1), 10);
+
+        while (nextElement) {
+            const nextTag = nextElement.tagName;
+            if (nextTag.match(/^H[1-6]$/)) {
+                const nextLevel = parseInt(nextTag.substring(1), 10);
+                if (nextLevel <= startLevel) {
+                    break;
+                }
+            }
+            results.push(nextElement);
+            nextElement = nextElement.nextElementSibling;
+        }
+        return results;
+    }
+
+    function handleParentRating(parentElement, newRating) {
+        const state = parentClickState.get(parentElement) || {
+            rating: 'none',
+            level: 0
+        };
+        const children = getSubsequentSiblings(parentElement);
+
+        if (newRating === state.rating) {
+            if (state.level === 1) {
+                state.level = 2;
+                children.forEach(child => applyHierarchicalState(child, newRating));
+                logger.debug(`块状评价 (二次点击): ${newRating}`, parentElement);
+            } else {
+                state.rating = 'none';
+                state.level = 0;
+                applyHierarchicalState(parentElement, 'none');
+                children.forEach(child => applyHierarchicalState(child, 'none'));
+                logger.debug(`块状评价 (取消): none`, parentElement);
+            }
+        } else {
+            if (state.level === 2) {
+                state.rating = newRating;
+                applyHierarchicalState(parentElement, newRating);
+                children.forEach(child => applyHierarchicalState(child, newRating));
+                logger.debug(`块状评价 (翻转): ${newRating}`, parentElement);
+            } else {
+                state.rating = newRating;
+                state.level = 1;
+                applyHierarchicalState(parentElement, 'none');
+                children.forEach(child => applyHierarchicalState(child, 'none'));
+                applyHierarchicalState(parentElement, newRating);
+                children.forEach(child => flashElement(child));
+                logger.debug(`块状评价 (首次点击): ${newRating}`, parentElement);
+            }
+        }
+        parentClickState.set(parentElement, state);
+    }
+
+    let debounceTimer = null;
+    const debouncedProcessNewElements = () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            processNewElements();
+        }, 500);
+    };
+
+    const observer = new MutationObserver(debouncedProcessNewElements);
+
+    let isSelectionModeActive = false;
+    let quickHighlightButton = null;
+    let lastSelectionRange = null;
     let cursorFollower = null;
     let latestMouseX = 0,
         latestMouseY = 0;
@@ -278,33 +205,19 @@ const observer = new MutationObserver(debouncedProcessNewElements);
     let collectionHideTimer = null;
     let copyToast = null;
     let isCollectionPanelPinned = false;
-    let isAutoSendActive = false; // vNext: 默认关闭
+    let isAutoSendActive = false;
     let activeContextMenu = null;
-    let previewTooltip = null; // vNext: 为预览弹窗创建一个全局引用
-    let isPanelAnimating = false; // vNext: 动画锁状态
-
-    // v0.5.12 新增：用于独立存储每个收集条目的选中状态
+    let previewTooltip = null;
+    let isPanelAnimating = false;
     let collectionItemStates = new Map();
 
-    // --- 工具函数 ---
-    /**
-     * 为一个元素添加闪烁效果的CSS类，并在动画结束后移除它。
-     * @param {HTMLElement} element - 需要闪烁的元素。
-     */
     function flashElement(element) {
         element.classList.add('yummy-flash');
         setTimeout(() => {
             element.classList.remove('yummy-flash');
-        }, 500); // 持续时间必须与 CSS 动画的持续时间相匹配。
+        }, 500);
     }
 
-    /**
-     * 从一个元素中获取纯净的文本内容，自动移除所有由Yummy添加的UI组件。
-     * 这是为了确保在后续处理（如生成提示词）时，不会把 "😋" 或 "📚" 这类UI文本也包含进去。
-     * 这是一个非常重要的"数据清洗"步骤。
-     * @param {HTMLElement} element The element to get text from.
-     * @returns {string} The cleaned text content.
-     */
     const getCleanText = (element) => {
         if (!element) return '';
         const clone = element.cloneNode(true);
@@ -312,22 +225,16 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         return clone.textContent.trim();
     };
 
-    /**
-     * 为字符串生成一个简单的、稳定的哈希ID。
-     * @param {string} str 
-     * @returns {string}
-     */
     function simpleHash(str) {
         let hash = 0;
         for (let i = 0; i < str.length; i++) {
             const char = str.charCodeAt(i);
             hash = (hash << 5) - hash + char;
-            hash |= 0; // Convert to 32bit integer
+            hash |= 0;
         }
         return `yummy-id-${Math.abs(hash)}`;
     }
 
-    // vNext: 修复函数作用域BUG，将此函数移到外部
     const getTextWithHighlight = (element) => {
         if (!element) return '';
         const clone = element.cloneNode(true);
@@ -335,14 +242,9 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         return clone.textContent.trim();
     };
 
-    // vNext: 清理不再使用的旧函数 (buildPrompt, collectMarkedData, generateAndApplyPrompt)
-
-    // vNext: 全新的聚合 Prompt 生成逻辑
     function generateAggregatePrompt(scopeElement) {
-        // 1. 收集数据
         const likedItems = new Set();
         scopeElement.querySelectorAll('.yummy-liked').forEach(el => {
-            // 使用更温和的 getTextWithHighlight 来确保句子不会被挖掉
             const text = getTextWithHighlight(el);
             if (text) likedItems.add(text);
         });
@@ -353,9 +255,7 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             if (text) dislikedItems.add(text);
         });
 
-        // 2. 构建 Prompt
         let prompt = '';
-        // vNext: 修复选区计算BUG，使用单一换行符确保长度计算一致
         const likedText = Array.from(likedItems).join('\n');
         const dislikedText = Array.from(dislikedItems).join('\n');
 
@@ -367,27 +267,23 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             prompt += `我不喜欢的语句有：\n${dislikedText}\n\n`;
         }
 
-        // 如果什么都没收集到，则返回 null
         if (!prompt) {
             return null;
         }
 
-        // 3. 添加预设的 instruction
         const presetInstruction = "请你根据我所标记的上述内容进行拓展延伸";
         prompt += presetInstruction;
         
         return { prompt, instructionLength: presetInstruction.length };
     }
 
-    // vNext: 全新的注入和选中逻辑
     function injectAndSelectPrompt({ prompt, instructionLength }) {
-        const inputBox = document.querySelector('div#prompt-textarea'); // 明确指定是 div
+        const inputBox = document.querySelector('div#prompt-textarea');
         if (!inputBox) {
             alert('Yummy错误：\n找不到输入框！');
             return;
         }
 
-        // 1. 注入文本到 contenteditable div 的 <p> 标签中
         let p = inputBox.querySelector('p');
         if (!p) {
             p = document.createElement('p');
@@ -399,12 +295,9 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             p.classList.remove('placeholder');
         }
 
-        // 手动触发 input 事件，告知 ChatGPT 输入框内容已改变
         inputBox.dispatchEvent(new Event('input', { bubbles: true }));
         inputBox.focus();
 
-        // 2. vNext: 使用 Range 和 Selection API 来创建选区
-        // 使用 setTimeout 确保在浏览器渲染和处理完 value 之后再设置选区
         setTimeout(() => {
            const selection = window.getSelection();
            if (!selection) return;
@@ -413,8 +306,6 @@ const observer = new MutationObserver(debouncedProcessNewElements);
            if (paragraph && paragraph.lastChild && paragraph.lastChild.nodeType === Node.TEXT_NODE) {
                const lastTextNode = paragraph.lastChild;
                const textContent = lastTextNode.textContent || '';
-               
-               // 指令应该就在这个最后文本节点的末尾
                const selectionStart = textContent.length - instructionLength;
 
                if (selectionStart >= 0) {
@@ -437,10 +328,8 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             }
          }, 10);
 
-        // 3. 检查并触发自动发送
         if (isAutoSendActive) {
             setTimeout(() => {
-                // vNext: 从 document 级别查找发送按钮，更稳健
                 let sendButton = document.querySelector('button[data-testid*="send"]:not(:disabled), button[class*="send"]:not(:disabled)');
                 if (sendButton) {
                     sendButton.click();
@@ -451,9 +340,6 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         }
     }
 
-
-    // --- UI与交互逻辑 ---
-    // vNext: 重写 Toast 逻辑，以支持两种定位模式
     let toastTimer = null;
     function showToast(message, event = null) {
         if (!copyToast) return;
@@ -462,16 +348,12 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             clearTimeout(toastTimer);
         }
 
-        // 清理旧模式并根据 event 设置新模式
         copyToast.classList.remove('yummy-toast-panel-mode', 'yummy-toast-cursor-mode', 'visible');
-        
-        // 强制浏览器重绘以重置动画
         void copyToast.offsetWidth;
 
         copyToast.firstElementChild.textContent = message;
 
         if (event) {
-            // 跟随光标模式
             copyToast.classList.add('yummy-toast-cursor-mode');
             const toastWidth = copyToast.offsetWidth;
             let left = event.clientX + 10;
@@ -481,10 +363,9 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             copyToast.style.left = `${left}px`;
             copyToast.style.top = `${event.clientY + 10}px`;
         } else {
-            // 面板内固定模式
             copyToast.classList.add('yummy-toast-panel-mode');
-            copyToast.style.left = '50%'; // 重置，让CSS的transform生效
-            copyToast.style.top = ''; // 清除top以防干扰
+            copyToast.style.left = '50%';
+            copyToast.style.top = '';
         }
         
         copyToast.classList.add('visible');
@@ -536,7 +417,7 @@ const observer = new MutationObserver(debouncedProcessNewElements);
 
         const parentElement = effectiveRange.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? effectiveRange.commonAncestorContainer : effectiveRange.commonAncestorContainer.parentElement;
         const isInMainContent = parentElement.closest('main');
-        const isInsideYummyUI = parentElement.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-quick-highlight-button, #yummy-collection-panel');
+        const isInsideYummyUI = parentElement.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-collection-panel');
 
         if (!isInMainContent || isInsideYummyUI) {
             if (selection.rangeCount > 0) selection.removeAllRanges();
@@ -586,7 +467,6 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         } finally {
             if (selection.rangeCount > 0) selection.removeAllRanges();
         }
-        // v0.5.7 新增：高亮操作后自动同步
         syncCollectionPanelWithDOM();
     }
 
@@ -616,9 +496,8 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             parent.insertBefore(element.firstChild, element);
         }
         parent.removeChild(element);
-        parent.normalize(); // Merge adjacent text nodes
+        parent.normalize();
         logger.info('高亮已移除。');
-        // v0.5.7 新增：取消高亮后自动同步
         syncCollectionPanelWithDOM();
     }
 
@@ -642,8 +521,6 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         }
 
         lastSelectionRange = range.cloneRange();
-        // v0.5.8 修复：快捷高亮按钮的位置现在基于鼠标指针的坐标(event.clientX/Y)，
-        // 而不是基于选区的边界矩形(getBoundingClientRect)，以确保按钮始终出现在光标附近。
         quickHighlightButton.style.display = 'flex';
         quickHighlightButton.style.left = `${event.clientX + 5}px`;
         quickHighlightButton.style.top = `${event.clientY + 5}px`;
@@ -656,130 +533,40 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         }
     }
 
-    /* vNext: 移除右键菜单逻辑
-    function showContextMenu(event, item) {
-        event.preventDefault();
-        closeActiveContextMenu();
-
-        const menu = document.createElement('div');
-        menu.className = 'yummy-context-menu';
-
-        const performCopy = () => {
-            const textToCopy = item.textContent || '';
-            navigator.clipboard.writeText(textToCopy).then(() => {
-                showToast('已复制!', event);
-                item.classList.add('copied');
-                setTimeout(() => item.classList.remove('copied'), 1000);
-            }).catch(err => {
-                logger.error('复制失败', err);
-                showToast('复制失败!', event);
-            });
-        };
-
-        const starOption = document.createElement('div');
-        starOption.className = 'yummy-context-menu-item';
-        const isStarred = item.classList.contains('starred');
-        starOption.innerHTML = `<span>${isStarred ? '🌟' : '⭐'}</span> ${isStarred ? '取消星标' : '添加星标'}`;
-        starOption.addEventListener('click', () => {
-            item.classList.toggle('starred');
-            closeActiveContextMenu();
-        });
-        menu.appendChild(starOption);
-
-        const copyOption = document.createElement('div');
-        copyOption.className = 'yummy-context-menu-item';
-        copyOption.innerHTML = '<span>📋</span> 复制内容';
-        copyOption.addEventListener('click', () => {
-            performCopy();
-            closeActiveContextMenu();
-        });
-        menu.appendChild(copyOption);
-
-        const deleteOption = document.createElement('div');
-        deleteOption.className = 'yummy-context-menu-item danger';
-        deleteOption.innerHTML = '<span>🗑️</span> 删除条目';
-        deleteOption.addEventListener('click', () => {
-            item.remove();
-            closeActiveContextMenu();
-        });
-        menu.appendChild(deleteOption);
-
-        document.body.appendChild(menu);
-        activeContextMenu = menu;
-
-        const {
-            clientX: mouseX,
-            clientY: mouseY
-        } = event;
-        const {
-            offsetWidth: menuWidth,
-            offsetHeight: menuHeight
-        } = menu;
-        const {
-            innerWidth: winWidth,
-            innerHeight: winHeight
-        } = window;
-
-        let x = mouseX;
-        let y = mouseY;
-        if (mouseX + menuWidth > winWidth) {
-            x = winWidth - menuWidth - 5;
-        }
-        if (mouseY + menuHeight > winHeight) {
-            y = winHeight - menuHeight - 5;
-        }
-        menu.style.top = `${y}px`;
-        menu.style.left = `${x}px`;
-    }
-    */
-
-    /**
-     * v0.5.7 核心重构:
-     * 将原有的手动 collectHighlights 函数重构为自动同步函数。
-     * 此函数负责扫描整个 DOM，获取所有“喜欢”和“高亮”的内容，
-     * 并用这些内容完全替换掉收集面板中的条目，确保实时同步。
-     */
-    // v0.5.8 修复作用域问题：将此函数赋值给全局占位符，以便 applyHierarchicalState 可以调用它。
     syncCollectionPanelWithDOM = function() {
         if (!collectionContent) return;
 
-        // vNext: Bug修复 - 重构数据收集逻辑以实现“整体与局部并存”
         let collectedItems = [];
-        const processedElements = new Set(); // 用于通过元素引用去重
+        const processedElements = new Set();
 
-        // 辅助函数，用于将元素添加到收集列表，并进行基础去重
         const addItem = (el, type, customTextExtractor = getCleanText) => {
-            if (processedElements.has(el)) return; // 防止完全相同的元素被重复处理
+            if (processedElements.has(el)) return;
 
             const text = customTextExtractor(el);
             if (text) {
-                const id = simpleHash(text + type); // 将类型加入哈希以区分内容相同但类型不同的条目
+                const id = simpleHash(text + type);
                 const rect = el.getBoundingClientRect();
                 collectedItems.push({
                     id,
                     text,
                     type,
                     position: rect.top + window.scrollY,
-                    element: el // 保存元素引用以供排序
+                    element: el
                 });
                 processedElements.add(el);
             }
         };
 
-        // 第一步：收集所有 'liked' 的元素 (整体)
         document.querySelectorAll('.yummy-liked:not(.yummy-selection-highlight)').forEach(el => {
-            // 确保我们处理的是最顶层的 liked 块，避免一个块内的 P 和外层 DIV 都被收集
             if (!el.parentElement.closest('.yummy-liked')) {
                  addItem(el, 'liked', getTextWithHighlight);
             }
         });
 
-        // 第二步：收集所有 'highlight' 的元素 (局部)
         document.querySelectorAll('.yummy-selection-highlight').forEach(el => {
             addItem(el, 'highlight');
         });
 
-        // 根据元素在文档中的原始位置进行稳定排序
         collectedItems.sort((a, b) => {
             const position = a.element.compareDocumentPosition(b.element);
             if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
@@ -859,48 +646,39 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             updateCategoryCheckboxStates();
         });
         
-        // vNext: 修复BUG，将事件监听器绑定到整个div而不是仅文本节点
         textContentDiv.addEventListener('click', (event) => {
             event.stopPropagation();
             const textToCopy = textContentDiv.textContent || '';
             navigator.clipboard.writeText(textToCopy).then(() => {
-                showToast('已复制!', event); // vNext: 传递 event
+                showToast('已复制!', event);
                 item.classList.add('copied-flash');
                 setTimeout(() => item.classList.remove('copied-flash'), 700);
             }).catch(err => {
                 logger.error('复制失败', err);
-                showToast('复制失败!', event); // vNext: 传递 event
+                showToast('复制失败!', event);
             });
         });
 
-        // vNext: 新增悬浮预览逻辑 (已修复)
         item.addEventListener('mouseenter', () => {
-            // vNext: 动画锁守卫
             if (isPanelAnimating) return;
             
             const textElement = item.querySelector('.yummy-item-text-content');
-            // 检查文本内容是否真的因为截断而溢出了
             if (textElement && textElement.scrollHeight > textElement.clientHeight) {
                 if (previewTooltip) {
-                    // 更新 tooltip 内容
                     previewTooltip.textContent = text;
-                    
-                    // 先让 tooltip 可见但透明，以便我们能测量它的尺寸
                     previewTooltip.style.visibility = 'visible';
                     previewTooltip.style.opacity = '0';
 
                     const itemRect = item.getBoundingClientRect();
                     const tooltipRect = previewTooltip.getBoundingClientRect();
 
-                    // 定位在条目的左侧
                     let left = itemRect.left - tooltipRect.width - 10;
-                    if (left < 0) { // 防止跑到屏幕外
+                    if (left < 0) {
                         left = 10;
                     }
 
-                    // 垂直居中对齐
                     let top = itemRect.top + (itemRect.height / 2) - (tooltipRect.height / 2);
-                    if (top < 0) { // 防止跑到屏幕外
+                    if (top < 0) {
                         top = 10;
                     } else if (top + tooltipRect.height > window.innerHeight) {
                         top = window.innerHeight - tooltipRect.height - 10;
@@ -908,15 +686,12 @@ const observer = new MutationObserver(debouncedProcessNewElements);
 
                     previewTooltip.style.left = `${left}px`;
                     previewTooltip.style.top = `${top}px`;
-
-                    // 渐显 tooltip
                     previewTooltip.style.opacity = '1';
                 }
             }
         });
 
         item.addEventListener('mouseleave', () => {
-            // 鼠标移出时，隐藏 tooltip
             if (previewTooltip) {
                 previewTooltip.style.visibility = 'hidden';
                 previewTooltip.style.opacity = '0';
@@ -925,8 +700,6 @@ const observer = new MutationObserver(debouncedProcessNewElements);
 
         collectionContent.appendChild(item);
 
-        // vNext: 智能检测文本是否溢出，并按需应用渐变效果
-        // 使用 setTimeout 确保浏览器有时间完成渲染和计算尺寸
         setTimeout(() => {
             if (textContentDiv.scrollHeight > textContentDiv.clientHeight) {
                 textContentDiv.classList.add('is-overflowing');
@@ -936,7 +709,6 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         }, 0);
     }
 
-    // vNext: 重构，根据类型更新两个复选框的状态
     function updateCategoryCheckboxStates() {
         const updateStateForType = (type) => {
             const controlArea = document.getElementById(`yummy-footer-select-${type}-area`);
@@ -950,11 +722,11 @@ const observer = new MutationObserver(debouncedProcessNewElements);
                 checkbox.checked = false;
                 checkbox.indeterminate = false;
                 controlArea.classList.remove('checked', 'indeterminate');
-                controlArea.style.display = 'none'; // 如果没有该类型的条目，则隐藏控制器
+                controlArea.style.display = 'none';
                 return;
             }
             
-            controlArea.style.display = 'flex'; // 确保可见
+            controlArea.style.display = 'flex';
             const checkedCount = Array.from(allItemsOfType).filter(item => item.classList.contains('selected')).length;
 
             if (checkedCount === 0) {
@@ -986,7 +758,6 @@ const observer = new MutationObserver(debouncedProcessNewElements);
     }
 
     function createUiElements() {
-        // --- Panels & Buttons ---
         const controlPanel = document.createElement('div');
         controlPanel.className = 'yummy-control-panel';
 
@@ -1004,7 +775,6 @@ const observer = new MutationObserver(debouncedProcessNewElements);
 
         const separator1 = document.createElement('hr');
         
-        // vNext: 废除“整理”和“发散”模式，替换为“聚合”按钮
         const aggregateBtn = document.createElement('button');
         aggregateBtn.className = 'yummy-control-button';
         aggregateBtn.id = 'yummy-aggregate-btn';
@@ -1031,47 +801,41 @@ const observer = new MutationObserver(debouncedProcessNewElements);
                 return;
             }
 
-            // vNext: 调用新的注入函数
             injectAndSelectPrompt(result);
         });
 
         const separator2 = document.createElement('hr');
 
         const autoSendBtn = document.createElement('button');
-        // vNext: 默认关闭自动发送
         autoSendBtn.className = 'yummy-control-button';
         autoSendBtn.id = 'yummy-autosend-btn';
         autoSendBtn.textContent = '🚀';
-        autoSendBtn.title = '自动发送已关闭，点击开启'; // vNext: 更新默认 title
+        autoSendBtn.title = '自动发送已关闭，点击开启';
         autoSendBtn.addEventListener('click', () => {
             isAutoSendActive = !isAutoSendActive;
             autoSendBtn.classList.toggle('active', isAutoSendActive);
             autoSendBtn.title = isAutoSendActive ? '自动发送已开启，点击关闭' : '自动发送已关闭，点击开启';
         });
 
-        // vNext: 重构自动发送提示气泡
         const autoSendTooltip = document.createElement('div');
         autoSendTooltip.id = 'yummy-autosend-tooltip';
-        autoSendTooltip.innerHTML = `点击可开启自动发送，为您节省一步操作！<span class="yummy-tooltip-dismiss-link">不再提示</span>`;
+        autoSendTooltip.innerHTML = `点击可开启自动发送<br>为您节省一步操作！<span class="yummy-tooltip-dismiss-link">不再提示</span>`;
         autoSendBtn.appendChild(autoSendTooltip);
 
         const dismissLink = autoSendTooltip.querySelector('.yummy-tooltip-dismiss-link');
 
-        // 检查是否需要显示提示
         if (localStorage.getItem('yummyAutoSendTooltipDismissed') !== 'true') {
             setTimeout(() => {
                 autoSendTooltip.classList.add('visible');
             }, 1000); 
         }
 
-        // 单击气泡任意位置 -> 临时关闭
         autoSendTooltip.addEventListener('click', () => {
             autoSendTooltip.classList.remove('visible');
         });
 
-        // 单击“不再提示”链接 -> 永久关闭
         dismissLink.addEventListener('click', (e) => {
-            e.stopPropagation(); // 关键：阻止事件冒泡到父元素(autoSendTooltip)的点击事件
+            e.stopPropagation();
             autoSendTooltip.classList.remove('visible');
             localStorage.setItem('yummyAutoSendTooltipDismissed', 'true');
         });
@@ -1114,25 +878,14 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         collectionHeaderText.textContent = '📋 Yummy 收集面板';
         collectionHeader.title = '点击可钉住/取消钉住面板';
 
-        /* vNext: 移除“清除全部”按钮的创建逻辑
-        const collectionClearBtn = document.createElement('span');
-        collectionClearBtn.id = 'yummy-collection-clear-btn';
-        collectionClearBtn.textContent = '🚮';
-        collectionClearBtn.title = '清空所有条目';
-        */
-
         collectionHeader.appendChild(collectionPinBtn);
         collectionHeader.appendChild(collectionHeaderText);
-        /* vNext: 移除“清除全部”按钮的添加逻辑
-        collectionHeader.appendChild(collectionClearBtn);
-        */
         collectionPanel.appendChild(collectionHeader);
 
         collectionContent = document.createElement('div');
         collectionContent.id = 'yummy-collection-content';
         collectionPanel.appendChild(collectionContent);
 
-        // vNext: 重构脚部，使用两个分类选择器
         const collectionFooter = document.createElement('div');
         collectionFooter.id = 'yummy-collection-footer';
 
@@ -1185,7 +938,6 @@ const observer = new MutationObserver(debouncedProcessNewElements);
 
         document.body.appendChild(collectionPanel);
 
-        // --- Event Listeners ---
         selectionModeButton.addEventListener('click', () => {
             isSelectionModeActive = !isSelectionModeActive;
             selectionModeButton.classList.toggle('active', isSelectionModeActive);
@@ -1205,37 +957,11 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             collectionPinBtn.title = isCollectionPanelPinned ? '取消钉住' : '钉住面板';
         });
 
-        /* vNext: 移除“清除全部”按钮的事件监听逻辑
-        collectionClearBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (collectionContent) {
-                if (collectionContent.innerHTML === '') {
-                    showToast('面板已经空了'); // vNext: 不再传递 event
-                    return;
-                }
-                collectionContent.innerHTML = '';
-                collectionItemStates.clear(); // v0.5.12: 清空时也要清除状态
-                updateSelectAllCheckboxState();
-                logger.info('收集面板已清空。');
-                showToast('面板已清空'); // vNext: 不再传递 event
-            }
-        });
-        */
-
         collectionHeader.addEventListener('click', (e) => {
-            // vNext: 从判断条件中移除 collectionClearBtn
             if (collectionPinBtn.contains(e.target)) return;
              collectionPinBtn.click();
         });
         
-        // vNext: 移除旧的全选逻辑
-        /*
-        selectAllArea.addEventListener('click', () => {
-            selectAllCheckbox.checked = !selectAllCheckbox.checked;
-            selectAllCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-        */
-
         collectionPanel.addEventListener('mouseenter', () => {
             if (collectionHideTimer) {
                 clearTimeout(collectionHideTimer);
@@ -1244,7 +970,6 @@ const observer = new MutationObserver(debouncedProcessNewElements);
         });
 
         collectionPanel.addEventListener('mouseleave', () => {
-            // Check if context menu is active before hiding
             if (!isCollectionPanelPinned && !activeContextMenu) {
                 collectionHideTimer = setTimeout(() => {
                     collectionPanel.classList.remove('visible');
@@ -1252,26 +977,10 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             }
         });
 
-        // vNext: 移除旧的全选事件监听
-        /*
-        selectAllCheckbox.addEventListener('change', () => {
-            const isChecked = selectAllCheckbox.checked;
-            const allItems = collectionContent.querySelectorAll('.yummy-collection-item');
-            allItems.forEach(item => {
-                const itemId = item.dataset.yummyItemId;
-                if(itemId) {
-                    item.classList.toggle('selected', isChecked);
-                    collectionItemStates.set(itemId, isChecked);
-                }
-            });
-            updateSelectAllCheckboxState();
-        });
-        */
-
         copySelectedBtn.addEventListener('click', (e) => {
             const selectedItems = collectionContent.querySelectorAll('.yummy-collection-item.selected');
             if (selectedItems.length === 0) {
-                showToast('没有选中的内容'); // vNext: 不传递 event
+                showToast('没有选中的内容');
                 return;
             }
 
@@ -1280,15 +989,13 @@ const observer = new MutationObserver(debouncedProcessNewElements);
                 .join('\n\n---\n\n');
 
             navigator.clipboard.writeText(allText).then(() => {
-                 showToast(`已复制 ${selectedItems.length} 个条目`); // vNext: 不传递 event
+                 showToast(`已复制 ${selectedItems.length} 个条目`);
             }).catch(err => {
                 logger.error('复制选中内容失败', err);
-                showToast('复制失败'); // vNext: 不传递 event
+                showToast('复制失败');
             });
         });
 
-
-        // Quick hide button
         quickHighlightButton = document.createElement('div');
         quickHighlightButton.id = 'yummy-quick-highlight-button';
         quickHighlightButton.textContent = EMOJI_LIKE;
@@ -1301,133 +1008,140 @@ const observer = new MutationObserver(debouncedProcessNewElements);
             quickHighlightButton.style.display = 'none';
         });
 
-        // Cursor follower
         cursorFollower = document.createElement('div');
         cursorFollower.id = 'yummy-cursor-follower';
         cursorFollower.textContent = '✒️';
         document.body.appendChild(cursorFollower);
 
-        // Copy Toast
         copyToast = document.createElement('div');
         copyToast.id = 'yummy-copy-toast';
-        // vNext: 添加一个 span 用于文本，以便伪元素图标不影响文本内容
         const toastText = document.createElement('span');
         copyToast.appendChild(toastText);
-        // vNext: 将 Toast 附加到 collectionPanel 而不是 body
         collectionPanel.appendChild(copyToast);
 
-        // vNext: 监听面板动画事件以实现动画锁
         collectionPanel.addEventListener('transitionstart', (event) => {
-            // 只关心 right 属性的动画
             if (event.propertyName === 'right') {
                 isPanelAnimating = true;
             }
         });
         collectionPanel.addEventListener('transitionend', (event) => {
-            // 只关心 right 属性的动画
             if (event.propertyName === 'right') {
                 isPanelAnimating = false;
             }
         });
 
-        // vNext: 创建单例的预览弹窗
         previewTooltip = document.createElement('div');
         previewTooltip.id = 'yummy-preview-tooltip';
         document.body.appendChild(previewTooltip);
     }
 
-    /**
-     * 初始化所有与选择、高亮、面板相关的特性。
-     * 这个函数在IIFE的最后被调用。
-     */
     function initializeFeatures() {
-        // 1. 创建所有UI元素并添加到页面。
-        createUiElements();
-        // 2. 绑定全局事件监听器。
-        document.addEventListener('mouseup', handleTextSelection);
-        document.addEventListener('keydown', quickExitSelectionMode);
-        document.addEventListener('mousemove', onMouseMove);
+        try {
+            // Initialize the logger's UI first, so it's ready for any subsequent logs.
+            if (window.logger && typeof window.logger.init === 'function') {
+                window.logger.init();
+            }
 
-        document.addEventListener('click', (event) => {
-            // 新增逻辑：当点击页面其他位置时，隐藏收集面板
-            if (
-                collectionPanel &&
-                collectionPanel.classList.contains('visible') &&
-                !isCollectionPanelPinned &&
-                !collectionPanel.contains(event.target)
-            ) {
-                // 确保点击的不是打开面板的按钮，避免刚打开就关闭
-                const controlPanel = document.querySelector('.yummy-control-panel');
-                if (!controlPanel || !controlPanel.contains(event.target)) {
-                    collectionPanel.classList.remove('visible');
-                    logger.debug('Clicked outside, hiding collection panel.');
+            createUiElements();
+            document.addEventListener('mouseup', handleTextSelection);
+            document.addEventListener('keydown', quickExitSelectionMode);
+            document.addEventListener('mousemove', onMouseMove);
+
+            document.addEventListener('click', (event) => {
+                if (
+                    collectionPanel &&
+                    collectionPanel.classList.contains('visible') &&
+                    !isCollectionPanelPinned &&
+                    !collectionPanel.contains(event.target)
+                ) {
+                    const controlPanel = document.querySelector('.yummy-control-panel');
+                    if (!controlPanel || !controlPanel.contains(event.target)) {
+                        collectionPanel.classList.remove('visible');
+                        logger.debug('Clicked outside, hiding collection panel.');
+                    }
                 }
-            }
-        });
+            });
 
-        // 为一些需要全局清理的UI行为（如隐藏快捷按钮、关闭右键菜单）绑定事件。
-        document.addEventListener('mousedown', (e) => {
-            if (quickHighlightButton && e.target !== quickHighlightButton) {
-                quickHighlightButton.style.display = 'none';
-            }
-            if (activeContextMenu && !activeContextMenu.contains(e.target)) {
-                closeActiveContextMenu();
-            }
-        });
-        document.addEventListener('scroll', () => {
-            if (quickHighlightButton) quickHighlightButton.style.display = 'none';
-        });
+            document.addEventListener('mousedown', (e) => {
+                if (quickHighlightButton && e.target !== quickHighlightButton) {
+                    quickHighlightButton.style.display = 'none';
+                }
+                if (activeContextMenu && !activeContextMenu.contains(e.target)) {
+                    closeActiveContextMenu();
+                }
+            });
+            document.addEventListener('scroll', () => {
+                if (quickHighlightButton) quickHighlightButton.style.display = 'none';
+            });
+        } catch (e) {
+            console.error("Yummy! fatal error during UI initialization:", e);
+            const errorDiv = document.createElement('div');
+            errorDiv.textContent = `Yummy! A critical error occurred: ${e.message}. Some features might not work. Please try reloading the page.`;
+            errorDiv.style.position = 'fixed';
+            errorDiv.style.top = '10px';
+            errorDiv.style.right = '10px';
+            errorDiv.style.backgroundColor = 'red';
+            errorDiv.style.color = 'white';
+            errorDiv.style.padding = '10px';
+            errorDiv.style.zIndex = '10000';
+            errorDiv.style.borderRadius = '5px';
+            document.body.appendChild(errorDiv);
+        }
     }
 
-    initializeFeatures();
+    function initializeYummy() {
+        try {
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+            logger.info("Yummy 观察者已启动。");
+        } catch (e) {
+            console.error("Yummy! failed to start observer:", e);
+        }
+    }
+
+    function runWhenStable() {
+        let stabilityTimer = null;
+        let isInitialized = false;
+
+        const stabilityObserver = new MutationObserver(() => {
+            if (isInitialized) return;
+            clearTimeout(stabilityTimer);
+            stabilityTimer = setTimeout(() => {
+                // DOM is stable now for a longer period.
+                // Double requestAnimationFrame to wait for next paint cycle.
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        if (isInitialized) return;
+                        isInitialized = true;
+                        
+                        stabilityObserver.disconnect();
+                        logger.debug("DOM 已稳定，Yummy! 正式启动。");
+                        
+                        // Now, safely initialize all features.
+                        try {
+                            initializeFeatures();
+                            initializeYummy(); // This sets up the main, long-term observer
+                            logger.info("Yummy! 插件已成功初始化。");
+                        } catch (e) {
+                            logger.error("Yummy! 插件初始化时发生致命错误: ", e);
+                            const errorDiv = document.createElement('div');
+                            errorDiv.textContent = `Yummy! 插件启动失败，请尝试刷新页面或联系开发者。错误: ${e.message}`;
+                            errorDiv.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background-color:red;color:white;padding:10px;border-radius:5px;z-index:9999;font-size:14px;';
+                            document.body.appendChild(errorDiv);
+                        }
+                    });
+                });
+            }, 1500); // Increased stability wait time to 1.5 seconds.
+        });
+
+        stabilityObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+    
+    runWhenStable();
 
 })();
-
-/**
- * 启动 MutationObserver，开始监听整个页面的变化。
- */
-function initializeYummy() {
-    observer.observe(document.body, {
-        childList: true, // 监听子节点的添加或删除
-        subtree: true    // 监听所有后代节点
-    });
-    logger.info("Yummy 观察者已启动。");
-}
-
-// 在脚本加载的最后，启动监听器。
-initializeYummy();
-
-/**
- * 获取一个标题元素之后、直到下一个同级或更高级标题之前的所有内容块。
- * @param {HTMLElement} startElement - 开始的标题元素。
- * @returns {Array<HTMLElement>}
- */
-function getSubsequentSiblings(startElement) {
-    // vNext: 修复 ReferenceError，并补全函数逻辑。
-    // 1. 初始化一个空数组来存放结果。
-    const results = [];
-    if (!startElement) return results;
-
-    // 2. 从起始元素的直接下一个同级元素开始遍历。
-    let nextElement = startElement.nextElementSibling;
-    const startLevel = parseInt(startElement.tagName.substring(1), 10);
-
-    // 3. 循环遍历所有后续的同级元素。
-    while (nextElement) {
-        const nextLevelMatch = nextElement.tagName.match(/^H(\d)$/);
-        // 4. 如果遇到另一个标题...
-        if (nextLevelMatch) {
-            const nextLevel = parseInt(nextLevelMatch[1], 10);
-            // ...并且这个标题的级别等于或高于起始标题的级别，则停止收集。
-            if (nextLevel <= startLevel) {
-                break;
-            }
-        }
-        // 5. 否则，将当前元素添加到结果数组中。
-        results.push(nextElement);
-        nextElement = nextElement.nextElementSibling;
-    }
-
-    // 6. 返回收集到的所有元素。
-    return results;
-}

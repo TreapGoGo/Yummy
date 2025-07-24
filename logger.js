@@ -1,4 +1,4 @@
-// Yummy! Logger V2 - Advanced, Controllable, and Groupable
+// Yummy! Logger V2.1 - Now with controlled initialization
 
 (function () {
     let logContainer, logContentDiv;
@@ -11,6 +11,8 @@
     };
     let currentLevel = logLevels.DEBUG;
     let groupIndent = 0;
+    let isInitialized = false;
+    let pendingLogs = [];
 
     function createLogContainer() {
         if (document.getElementById('yummy-log-container')) return;
@@ -119,6 +121,9 @@
         document.body.appendChild(logContainer);
 
         makeDraggable(logContainer, header);
+        
+        isInitialized = true;
+        flushPendingLogs();
     }
 
     function makeDraggable(container, handle) {
@@ -147,6 +152,12 @@
         });
     }
 
+    function flushPendingLogs() {
+        if (!logContentDiv) return;
+        pendingLogs.forEach(logItem => appendLogEntry(logItem.level, logItem.message, logItem.args));
+        pendingLogs = [];
+    }
+
     function formatArgs(args) {
         if (args.length === 0) return '';
         return args.map(arg => {
@@ -169,14 +180,9 @@
         }).join(' ');
     }
 
-
-    function log(level, message, ...args) {
-        if (level < currentLevel) return;
-
+    function appendLogEntry(level, message, args) {
         const timestamp = new Date().toLocaleTimeString();
         const levelName = Object.keys(logLevels).find(key => logLevels[key] === level);
-
-        if (!logContentDiv) createLogContainer();
 
         const logEntry = document.createElement('div');
         const color = {
@@ -190,10 +196,26 @@
         logEntry.style.borderLeft = groupIndent > 0 ? '1px solid #444' : 'none';
         logEntry.style.marginBottom = '4px';
 
-        const finalMessage = `[${levelName}] ${message} ${formatArgs(args)}`;
+        const finalMessage = `[${timestamp} ${levelName}] ${message} ${formatArgs(args)}`;
         logEntry.textContent = finalMessage;
         logContentDiv.appendChild(logEntry);
         logContentDiv.scrollTop = logContentDiv.scrollHeight;
+    }
+
+
+    function log(level, message, ...args) {
+        if (level < currentLevel) return;
+
+        if (!isInitialized) {
+            pendingLogs.push({ level, message, args });
+            // Keep a small buffer to prevent memory leaks if init is never called
+            if (pendingLogs.length > 500) {
+                pendingLogs.shift();
+            }
+            return;
+        }
+        
+        appendLogEntry(level, message, args);
     }
 
     const logger = {
@@ -221,6 +243,11 @@
                 logger.warn(`Invalid log level: ${levelName}`);
             }
         },
+        init: () => {
+            if (isInitialized) return;
+            // The actual UI creation is deferred until this init() is called.
+            createLogContainer();
+        }
     };
 
     // Expose logger to the window for interactive control
@@ -229,5 +256,6 @@
     // Replace the old logger if it exists
     window.logger = logger;
 
-    logger.info('新版日志系统已初始化 (仅悬浮窗模式)。');
+    // Do not log here anymore, as the UI is not ready.
+    // The main content script will log once everything is set up.
 })();
