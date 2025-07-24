@@ -280,6 +280,8 @@ const observer = new MutationObserver(debouncedProcessNewElements);
     let isCollectionPanelPinned = false;
     let isAutoSendActive = true;
     let activeContextMenu = null;
+    let previewTooltip = null; // vNext: 为预览弹窗创建一个全局引用
+    let isPanelAnimating = false; // vNext: 动画锁状态
 
     // v0.5.12 新增：用于独立存储每个收集条目的选中状态
     let collectionItemStates = new Map();
@@ -503,22 +505,46 @@ ${avoidanceText}
     }
 
     // --- UI与交互逻辑 ---
-    function showToast(message, event) {
+    // vNext: 重写 Toast 逻辑，以支持两种定位模式
+    let toastTimer = null;
+    function showToast(message, event = null) {
         if (!copyToast) return;
-        copyToast.textContent = message;
-        copyToast.style.visibility = 'hidden';
-        copyToast.style.display = 'block';
-        const toastWidth = copyToast.offsetWidth;
-        let left = event.clientX + 15;
-        if (left + toastWidth > window.innerWidth) {
-            left = event.clientX - toastWidth - 15;
+
+        if (toastTimer) {
+            clearTimeout(toastTimer);
         }
-        copyToast.style.left = `${left}px`;
-        copyToast.style.top = `${event.clientY}px`;
-        copyToast.style.visibility = 'visible';
-        setTimeout(() => {
-            copyToast.style.visibility = 'hidden';
-        }, 1500);
+
+        // 清理旧模式并根据 event 设置新模式
+        copyToast.classList.remove('yummy-toast-panel-mode', 'yummy-toast-cursor-mode', 'visible');
+        
+        // 强制浏览器重绘以重置动画
+        void copyToast.offsetWidth;
+
+        copyToast.firstElementChild.textContent = message;
+
+        if (event) {
+            // 跟随光标模式
+            copyToast.classList.add('yummy-toast-cursor-mode');
+            const toastWidth = copyToast.offsetWidth;
+            let left = event.clientX + 10;
+            if (left + toastWidth > window.innerWidth) {
+                left = event.clientX - toastWidth - 10;
+            }
+            copyToast.style.left = `${left}px`;
+            copyToast.style.top = `${event.clientY + 10}px`;
+        } else {
+            // 面板内固定模式
+            copyToast.classList.add('yummy-toast-panel-mode');
+            copyToast.style.left = '50%'; // 重置，让CSS的transform生效
+            copyToast.style.top = ''; // 清除top以防干扰
+        }
+        
+        copyToast.classList.add('visible');
+
+        toastTimer = setTimeout(() => {
+            copyToast.classList.remove('visible');
+            toastTimer = null;
+        }, 2000);
     }
 
     function updateFollower() {
@@ -769,47 +795,71 @@ ${avoidanceText}
     syncCollectionPanelWithDOM = function() {
         if (!collectionContent) return;
 
-        // vNext: 重构数据收集与排序逻辑
+        // vNext: Bug修复 - 重构数据收集逻辑以实现“整体与局部并存”
         let collectedItems = [];
-        const likedElements = document.querySelectorAll('.yummy-liked');
-        const highlightedElements = document.querySelectorAll('.yummy-selection-highlight');
+        const processedElements = new Set(); // 用于通过元素引用去重
 
-        const processElements = (elements, type) => {
-            elements.forEach(el => {
-                const text = getCleanText(el);
-                if (text) {
-                    const id = simpleHash(text);
-                    const rect = el.getBoundingClientRect();
-                    const position = rect.top + window.scrollY;
-                    
-                    // 避免重复添加同一个ID
-                    if (!collectedItems.some(item => item.id === id)) {
-                        collectedItems.push({
-                            id,
-                            text,
-                            type,
-                            position
-                        });
-                    }
-                }
-            });
+        // 辅助函数，用于将元素添加到收集列表，并进行基础去重
+        const addItem = (el, type, customTextExtractor = getCleanText) => {
+            if (processedElements.has(el)) return; // 防止完全相同的元素被重复处理
+
+            const text = customTextExtractor(el);
+            if (text) {
+                const id = simpleHash(text + type); // 将类型加入哈希以区分内容相同但类型不同的条目
+                const rect = el.getBoundingClientRect();
+                collectedItems.push({
+                    id,
+                    text,
+                    type,
+                    position: rect.top + window.scrollY,
+                    element: el // 保存元素引用以供排序
+                });
+                processedElements.add(el);
+            }
         };
 
-        processElements(likedElements, 'liked');
-        processElements(highlightedElements, 'highlight');
+        // 定义一个特殊的文本提取器，它只移除UI控件，但保留高亮
+        const getTextWithHighlight = (element) => {
+            if (!element) return '';
+            const clone = element.cloneNode(true);
+            clone.querySelectorAll('.yummy-rating-bar, .yummy-control-panel, #yummy-quick-highlight-button, #yummy-collection-panel').forEach(ui => ui.remove());
+            return clone.textContent.trim();
+        };
 
-        // 根据元素在文档中的位置进行排序
-        collectedItems.sort((a, b) => a.position - b.position);
-        
+        // 第一步：收集所有 'liked' 的元素 (整体)
+        document.querySelectorAll('.yummy-liked:not(.yummy-selection-highlight)').forEach(el => {
+            // 确保我们处理的是最顶层的 liked 块，避免一个块内的 P 和外层 DIV 都被收集
+            if (!el.parentElement.closest('.yummy-liked')) {
+                 addItem(el, 'liked', getTextWithHighlight);
+            }
+        });
+
+        // 第二步：收集所有 'highlight' 的元素 (局部)
+        document.querySelectorAll('.yummy-selection-highlight').forEach(el => {
+            addItem(el, 'highlight');
+        });
+
+        // 根据元素在文档中的原始位置进行稳定排序
+        collectedItems.sort((a, b) => {
+            const position = a.element.compareDocumentPosition(b.element);
+            if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+                return -1;
+            } else if (position & Node.DOCUMENT_POSITION_PRECEDING) {
+                return 1;
+            } else {
+                return 0;
+            }
+        });
+
         const newIds = collectedItems.map(item => item.id);
         const currentIds = Array.from(collectionContent.querySelectorAll('.yummy-collection-item')).map(item => item.dataset.yummyItemId);
 
+        let typeChanged = false;
         if (newIds.length === currentIds.length && newIds.every((id, index) => id === currentIds[index])) {
-            // vNext: 即使ID列表相同，也要检查类型是否有变化，因为一个元素可能从liked变成highlighted
-            let typeChanged = false;
             const currentItems = Array.from(collectionContent.querySelectorAll('.yummy-collection-item'));
             for(let i=0; i<currentItems.length; i++){
-                if(!currentItems[i].classList.contains(`type-${collectedItems[i].type}`)){
+                const currentTypeClass = Array.from(currentItems[i].classList).find(c => c.startsWith('type-'));
+                if (currentTypeClass !== `type-${collectedItems[i].type}`) {
                     typeChanged = true;
                     break;
                 }
@@ -874,17 +924,76 @@ ${avoidanceText}
             event.stopPropagation();
             const textToCopy = textContentDiv.textContent || '';
             navigator.clipboard.writeText(textToCopy).then(() => {
-                showToast('已复制!', event);
+                showToast('已复制!', event); // vNext: 传递 event
                 item.classList.add('copied-flash');
                 setTimeout(() => item.classList.remove('copied-flash'), 700);
             }).catch(err => {
                 logger.error('复制失败', err);
-                showToast('复制失败!', event);
+                showToast('复制失败!', event); // vNext: 传递 event
             });
         });
 
+        // vNext: 新增悬浮预览逻辑 (已修复)
+        item.addEventListener('mouseenter', () => {
+            // vNext: 动画锁守卫
+            if (isPanelAnimating) return;
+            
+            const textElement = item.querySelector('.yummy-item-text-content');
+            // 检查文本内容是否真的因为截断而溢出了
+            if (textElement && textElement.scrollHeight > textElement.clientHeight) {
+                if (previewTooltip) {
+                    // 更新 tooltip 内容
+                    previewTooltip.textContent = text;
+                    
+                    // 先让 tooltip 可见但透明，以便我们能测量它的尺寸
+                    previewTooltip.style.visibility = 'visible';
+                    previewTooltip.style.opacity = '0';
+
+                    const itemRect = item.getBoundingClientRect();
+                    const tooltipRect = previewTooltip.getBoundingClientRect();
+
+                    // 定位在条目的左侧
+                    let left = itemRect.left - tooltipRect.width - 10;
+                    if (left < 0) { // 防止跑到屏幕外
+                        left = 10;
+                    }
+
+                    // 垂直居中对齐
+                    let top = itemRect.top + (itemRect.height / 2) - (tooltipRect.height / 2);
+                    if (top < 0) { // 防止跑到屏幕外
+                        top = 10;
+                    } else if (top + tooltipRect.height > window.innerHeight) {
+                        top = window.innerHeight - tooltipRect.height - 10;
+                    }
+
+                    previewTooltip.style.left = `${left}px`;
+                    previewTooltip.style.top = `${top}px`;
+
+                    // 渐显 tooltip
+                    previewTooltip.style.opacity = '1';
+                }
+            }
+        });
+
+        item.addEventListener('mouseleave', () => {
+            // 鼠标移出时，隐藏 tooltip
+            if (previewTooltip) {
+                previewTooltip.style.visibility = 'hidden';
+                previewTooltip.style.opacity = '0';
+            }
+        });
+
         collectionContent.appendChild(item);
-        collectionContent.scrollTop = collectionContent.scrollHeight;
+
+        // vNext: 智能检测文本是否溢出，并按需应用渐变效果
+        // 使用 setTimeout 确保浏览器有时间完成渲染和计算尺寸
+        setTimeout(() => {
+            if (textContentDiv.scrollHeight > textContentDiv.clientHeight) {
+                textContentDiv.classList.add('is-overflowing');
+            } else {
+                textContentDiv.classList.remove('is-overflowing');
+            }
+        }, 0);
     }
 
     // vNext: 重构，根据类型更新两个复选框的状态
@@ -1117,14 +1226,14 @@ ${avoidanceText}
             e.stopPropagation();
             if (collectionContent) {
                 if (collectionContent.innerHTML === '') {
-                    showToast('面板已经空了', e);
+                    showToast('面板已经空了'); // vNext: 不再传递 event
                     return;
                 }
                 collectionContent.innerHTML = '';
                 collectionItemStates.clear(); // v0.5.12: 清空时也要清除状态
                 updateSelectAllCheckboxState();
                 logger.info('收集面板已清空。');
-                showToast('面板已清空', e);
+                showToast('面板已清空'); // vNext: 不再传递 event
             }
         });
         */
@@ -1178,7 +1287,7 @@ ${avoidanceText}
         copySelectedBtn.addEventListener('click', (e) => {
             const selectedItems = collectionContent.querySelectorAll('.yummy-collection-item.selected');
             if (selectedItems.length === 0) {
-                showToast('没有选中的内容', e);
+                showToast('没有选中的内容'); // vNext: 不传递 event
                 return;
             }
 
@@ -1187,10 +1296,10 @@ ${avoidanceText}
                 .join('\n\n---\n\n');
 
             navigator.clipboard.writeText(allText).then(() => {
-                 showToast(`已复制 ${selectedItems.length} 个条目`, e);
+                 showToast(`已复制 ${selectedItems.length} 个条目`); // vNext: 不传递 event
             }).catch(err => {
                 logger.error('复制选中内容失败', err);
-                showToast('复制失败', e);
+                showToast('复制失败'); // vNext: 不传递 event
             });
         });
 
@@ -1217,7 +1326,30 @@ ${avoidanceText}
         // Copy Toast
         copyToast = document.createElement('div');
         copyToast.id = 'yummy-copy-toast';
-        document.body.appendChild(copyToast);
+        // vNext: 添加一个 span 用于文本，以便伪元素图标不影响文本内容
+        const toastText = document.createElement('span');
+        copyToast.appendChild(toastText);
+        // vNext: 将 Toast 附加到 collectionPanel 而不是 body
+        collectionPanel.appendChild(copyToast);
+
+        // vNext: 监听面板动画事件以实现动画锁
+        collectionPanel.addEventListener('transitionstart', (event) => {
+            // 只关心 right 属性的动画
+            if (event.propertyName === 'right') {
+                isPanelAnimating = true;
+            }
+        });
+        collectionPanel.addEventListener('transitionend', (event) => {
+            // 只关心 right 属性的动画
+            if (event.propertyName === 'right') {
+                isPanelAnimating = false;
+            }
+        });
+
+        // vNext: 创建单例的预览弹窗
+        previewTooltip = document.createElement('div');
+        previewTooltip.id = 'yummy-preview-tooltip';
+        document.body.appendChild(previewTooltip);
     }
 
     /**

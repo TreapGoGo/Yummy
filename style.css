@@ -329,16 +329,59 @@ body.yummy-selection-mode-active {
     left: 0;
 }
 
+/* vNext: Toast 提示框的模块化重构 */
+
+/* 1. 通用外观样式 */
 #yummy-copy-toast {
-    position: fixed;
-    display: none;
-    z-index: 10002;
-    padding: 8px 12px;
-    background-color: rgba(17, 24, 39, 0.85);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background-color: rgba(40, 40, 40, 0.9);
     color: white;
-    border-radius: 6px;
+    padding: 10px 16px;
+    border-radius: 8px;
     font-size: 14px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    z-index: 10003;
     pointer-events: none;
+    
+    /* 默认隐藏 */
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out, visibility 0.3s;
+}
+
+/* 2. "面板内固定" 模式 */
+#yummy-copy-toast.yummy-toast-panel-mode {
+    position: absolute;
+    bottom: 65px;
+    left: 50%;
+    transform: translate(-50%, 10px); /* 初始位置在下方 */
+}
+#yummy-copy-toast.yummy-toast-panel-mode.visible {
+    visibility: visible;
+    opacity: 1;
+    transform: translate(-50%, 0); /* 滑入到最终位置 */
+}
+
+/* 3. "跟随光标" 模式 */
+#yummy-copy-toast.yummy-toast-cursor-mode {
+    position: fixed;
+    transform: translate(15px, 15px); /* 初始位置在光标右下方 */
+}
+#yummy-copy-toast.yummy-toast-cursor-mode.visible {
+    visibility: visible;
+    opacity: 1;
+    transform: translate(10px, 10px); /* 微调动画效果 */
+}
+
+
+/* 通用: Toast 内的“成功”对勾图标 */
+#yummy-copy-toast::before {
+    content: '✓';
+    font-weight: bold;
+    color: #4CAF50; /* 绿色 */
+    font-size: 16px;
 }
 
 /* --- Collection Panel (Left Drawer) --- */
@@ -456,6 +499,7 @@ body.yummy-selection-mode-active {
     display: flex;
     overflow: hidden;
     margin-bottom: 8px; /* v0.5.15: 用 margin 代替 gap */
+    position: relative; /* vNext: 为弹窗提供定位上下文 */
 }
 .yummy-collection-item:last-child {
     margin-bottom: 0; /* 移除最后一个元素的下边距 */
@@ -519,10 +563,53 @@ body.yummy-selection-mode-active {
 .yummy-item-text-content {
     padding: 10px 12px;
     cursor: pointer;
+    /* vNext: 使用 max-height 和渐变蒙版来替代 line-clamp */
+    max-height: 90px; /* 约等于4行文字的高度 (14px * 1.6 * 4) */
+    overflow: hidden;
+    position: relative; /* 为 ::after 伪元素提供定位上下文 */
+    transition: max-height 0.3s ease-in-out; /* 为可能的展开功能预留过渡 */
+}
+
+/* vNext: 优雅的渐变遮罩层 */
+.yummy-item-text-content::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 30px; /* 渐变的高度 */
+    background: transparent; /* vNext: 默认透明 */
+    transition: background 0.2s; /* 添加过渡效果 */
+    pointer-events: none; /* 确保不影响下层元素的鼠标事件 */
+}
+
+/* vNext: 仅当 JS 检测到文本溢出时，才应用渐变效果 */
+.yummy-item-text-content.is-overflowing::after {
+    background: linear-gradient(to bottom, transparent, white);
 }
 
 .yummy-collection-item.starred {
     box-shadow: 0 0 0 2px #ffc107; /* 用box-shadow代替border，避免影响布局 */
+}
+
+/* vNext: 为被截断的条目添加悬浮预览弹窗的样式 */
+#yummy-preview-tooltip {
+    visibility: hidden; /* 默认隐藏 */
+    width: 300px; /* 弹窗宽度 */
+    background-color: rgba(30, 30, 30, 0.95); /* 半透明深色背景 */
+    color: #fff;
+    text-align: left;
+    border-radius: 8px;
+    padding: 12px;
+    position: fixed; /* 使用 fixed 定位，避免被父容器裁剪 */
+    z-index: 10001; /* 确保在最顶层 */
+    opacity: 0;
+    transition: opacity 0.2s, visibility 0.2s;
+    pointer-events: none; /* 确保弹窗本身不捕获鼠标事件 */
+    white-space: pre-wrap; /* 保持文本换行 */
+    font-size: 13px; /* 字体可以稍小一些 */
+    line-height: 1.5;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
 }
 
 .yummy-collection-item:hover {
