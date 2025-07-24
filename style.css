@@ -482,7 +482,7 @@ body.yummy-selection-mode-active {
     left: 50%;
     width: 6px;
     height: 12px;
-    border: solid white;
+    border: solid black; /* vNext: 勾勾改为黑色 */
     border-width: 0 3px 3px 0;
     /* vNext: 修正对勾的方向和动画。先统一平移至中心，再进行旋转。同时调整垂直平移比例(-60%)以修正视觉中心。*/
     transform: translate(-50%, -60%) rotate(45deg) scale(0.8);
@@ -490,13 +490,24 @@ body.yummy-selection-mode-active {
     transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
-/* v0.5.14: 当条目被选中时，状态条的样式 */
-.yummy-collection-item.selected .yummy-item-status-bar {
-    background-color: #4A90E2;
+/* vNext: 新增颜色编码。为不同类型的条目定义不同的状态条颜色。 */
+/* 绿色高亮段落的样式 */
+.yummy-collection-item.type-liked.selected .yummy-item-status-bar {
+    background-color: #c8e6c9; /* vNext: 再次调整的柔和绿色 */
 }
-.yummy-collection-item.selected .yummy-item-status-bar:hover {
-    background-color: #357ABD;
+.yummy-collection-item.type-liked.selected .yummy-item-status-bar:hover {
+    background-color: #b9d9ba;
 }
+
+/* 黄色高亮语句的样式 */
+.yummy-collection-item.type-highlight.selected .yummy-item-status-bar {
+    background-color: #fff59d; /* vNext: 再次调整的柔和黄色 */
+}
+.yummy-collection-item.type-highlight.selected .yummy-item-status-bar:hover {
+    background-color: #fff176;
+}
+
+
 /* v0.5.14: 当条目被选中时，显示对勾 */
 .yummy-collection-item.selected .yummy-item-status-bar::before {
     opacity: 1;
@@ -537,6 +548,8 @@ body.yummy-selection-mode-active {
     background-color: #f5f5f5;
 }
 
+/* vNext: 删除旧的全选区域样式 */
+/*
 #yummy-footer-select-all-area {
     flex-shrink: 0;
     width: 36px;
@@ -548,55 +561,82 @@ body.yummy-selection-mode-active {
     border-radius: 6px;
     border: 1px solid #ccc;
 }
-#yummy-footer-select-all-area:hover {
+*/
+
+/* vNext: 为新的脚部控制区域（绿色和黄色）定义通用样式 */
+.yummy-footer-control-area {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    background-color: #e0e0e0;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    position: relative;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+}
+.yummy-footer-control-area:hover {
     background-color: #d0d0d0;
 }
-/* 全选的“选中”状态 */
-/* vNext: 修复BUG。当JS添加 .checked 类时，背景色也应该变为蓝色。*/
-#yummy-collection-select-all:checked + #yummy-footer-select-all-area,
-#yummy-footer-select-all-area.checked {
-    background-color: #4A90E2;
-}
-#yummy-footer-select-all-area.checked:hover {
-    background-color: #357ABD;
-}
 
-
-/* 全选的“对勾”图标 */
-#yummy-footer-select-all-area::before {
+/* 通用的“对勾”和“横线”图标样式 */
+.yummy-footer-control-area::before,
+.yummy-footer-control-area::after {
     content: '';
     position: absolute;
-    top: 50%;
     left: 50%;
-    width: 7px;
-    height: 14px;
-    border: solid white;
-    border-width: 0 3px 3px 0;
-    /* vNext: 修正对勾的方向。采用与上方条目内对勾相同的修正策略。 */
-    transform: translate(-50%, -60%) rotate(45deg);
-    opacity: 0;
+    top: 50%;
+    transform: translate(-50%, -50%);
     transition: opacity 0.2s ease;
 }
-#yummy-collection-select-all:checked ~ div::before,
-#yummy-footer-select-all-area.checked::before { /* JS might add a class */
+
+/* 对勾 */
+.yummy-footer-control-area::before {
+    width: 7px;
+    height: 14px;
+    border: solid black; /* vNext: 勾勾改为黑色 */
+    border-width: 0 3px 3px 0;
+    transform: translate(-50%, -60%) rotate(45deg);
+    opacity: 0;
+}
+
+/* 横线 (用于中间态) */
+.yummy-footer-control-area.indeterminate::after {
+    width: 16px;
+    height: 3px;
+    background-color: black; /* vNext: 横线改为黑色 */
+    border-radius: 1px;
     opacity: 1;
 }
 
-/* 全选的“部分选中”状态 (横线) */
-#yummy-footer-select-all-area.indeterminate {
-    background-color: #4A90E2;
-}
-#yummy-footer-select-all-area.indeterminate::before {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 14px;
-    height: 3px;
-    border: none;
-    background-color: white;
-    transform: translate(-50%, -50%);
+/* 当控件被选中时，显示对勾，隐藏横线 */
+.yummy-footer-control-area.checked::before {
     opacity: 1;
+}
+.yummy-footer-control-area.checked.indeterminate::after {
+    opacity: 0;
+}
+
+
+/* 为绿色和黄色的控制器定义独特的激活颜色 */
+#yummy-footer-select-liked-area.checked,
+#yummy-footer-select-liked-area.indeterminate {
+    background-color: #c8e6c9; /* vNext: 更新为柔和绿色 */
+    border-color: #b9d9ba;
+}
+#yummy-footer-select-liked-area.checked:hover,
+#yummy-footer-select-liked-area.indeterminate:hover {
+    background-color: #b9d9ba;
+}
+
+#yummy-footer-select-highlight-area.checked,
+#yummy-footer-select-highlight-area.indeterminate {
+    background-color: #fff59d; /* vNext: 更新为柔和黄色 */
+    border-color: #fff176;
+}
+#yummy-footer-select-highlight-area.checked:hover,
+#yummy-footer-select-highlight-area.indeterminate:hover {
+    background-color: #fff176;
 }
 
 
@@ -604,20 +644,20 @@ body.yummy-selection-mode-active {
     flex-grow: 1; /* 占满剩余空间 */
     padding: 6px 12px;
     font-size: 14px;
-    /* vNext: 按要求加粗字体，并更新颜色方案 */
+    /* vNext: 字体加粗，并更新为蓝色系 */
     font-weight: bold;
     border-radius: 6px;
     border: none;
-    background-color: #e0f2e9; /* 柔和的浅绿色 */
-    color: #2e7d32; /* 深绿色文本以保证对比度 */
+    background-color: #e7f3fe; /* 淡蓝色背景 */
+    color: #1c64f2; /* 主题蓝色文本 */
     cursor: pointer;
     transition: background-color 0.2s, color 0.2s;
     text-align: center;
 }
 
 #yummy-collection-copy-selected-btn:hover {
-    background-color: #c8e6d3; /* 悬停时颜色加深 */
-    color: #1b5e20;
+    background-color: #dbeafe; /* 悬停时颜色加深 */
+    color: #1a56d1;
 }
 
 /* --- Context Menu --- */
