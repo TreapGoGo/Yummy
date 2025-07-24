@@ -99,7 +99,7 @@ function addRatingBar(element) {
     // 2. 计算当前元素容器（.yummy-paragraph-container）相对于基准容器的水平偏移量（即缩进量）。
     // 3. 从预设的左偏移（-85px）中减去这个缩进量，得到新的left值。
     // 这样，无论元素（如<li>）缩进了多少，其评价栏的最终绝对位置都会被校正到同一垂直线上，实现精准对齐。
-    const turnContainer = element.closest('.group\\/conversation-turn');
+    const turnContainer = element.closest('.group\\/turn-messages'); // v0.5.6 修复: ChatGPT 更新了 turn 容器的类名
     if (turnContainer) {
         const turnContainerRect = turnContainer.getBoundingClientRect();
         // `container` 就是 .yummy-paragraph-container
@@ -404,7 +404,7 @@ ${avoidanceText}
         const isGlobal = event.shiftKey;
         const scope = isGlobal ?
             document.body :
-            Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).pop()?.closest('div.group\\/conversation-turn');
+            Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).pop()?.closest('.group\\/turn-messages'); // v0.5.6 修复: ChatGPT 更新了 turn 容器的类名
 
         if (!scope) {
             alert('Yummy错误：\n找不到任何AI回复内容可供处理。');
