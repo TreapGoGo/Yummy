@@ -271,17 +271,29 @@
             if (text) dislikedItems.add(text);
         });
 
+        const highlightedItems = new Set();
+        scopeElement.querySelectorAll('.yummy-selection-highlight').forEach(el => {
+            const text = getCleanText(el);
+            if(text) highlightedItems.add(text);
+        });
+
         let prompt = '';
         const likedText = Array.from(likedItems).join('\n');
         const dislikedText = Array.from(dislikedItems).join('\n');
+        const highlightedText = Array.from(highlightedItems).join('\n');
 
         if (likedText) {
-            prompt += `在你刚刚生成的内容中，我喜欢的语句有：\n${likedText}`;
+            prompt += `在我刚刚生成的内容中，我喜欢的语句有：\n${likedText}`;
         }
 
         if (dislikedText) {
             if (prompt) prompt += '\n\n';
             prompt += `我不喜欢的语句有：\n${dislikedText}`;
+        }
+
+        if (highlightedText) {
+            if (prompt) prompt += '\n\n';
+            prompt += `我划线高亮的重点有：\n${highlightedText}`;
         }
 
         return prompt ? prompt : null;
@@ -813,8 +825,6 @@
         collectionToggleButton.innerHTML = '📚';
         collectionToggleButton.title = '打开/关闭收集面板';
 
-        const separator1 = document.createElement('hr');
-        
         const aggregateBtn = document.createElement('button');
         aggregateBtn.className = 'yummy-control-button';
         aggregateBtn.id = 'yummy-aggregate-btn';
@@ -849,8 +859,6 @@
             openInstructionMenuWithContent(aggregatedContent);
         });
 
-        const separator2 = document.createElement('hr');
-
         const autoSendBtn = document.createElement('button');
         autoSendBtn.className = 'yummy-control-button';
         autoSendBtn.id = 'yummy-autosend-btn';
@@ -875,7 +883,8 @@
             }, 1000); 
         }
 
-        autoSendTooltip.addEventListener('click', () => {
+        autoSendTooltip.addEventListener('click', (e) => {
+            e.stopPropagation();
             autoSendTooltip.classList.remove('visible');
         });
 
@@ -884,8 +893,6 @@
             autoSendTooltip.classList.remove('visible');
             localStorage.setItem('yummyAutoSendTooltipDismissed', 'true');
         });
-
-        const separator3 = document.createElement('hr');
 
         const collapseBtn = document.createElement('button');
         collapseBtn.className = 'yummy-control-button';
@@ -900,11 +907,8 @@
 
         controlPanel.appendChild(selectionModeButton);
         controlPanel.appendChild(collectionToggleButton);
-        controlPanel.appendChild(separator1);
         controlPanel.appendChild(aggregateBtn);
-        controlPanel.appendChild(separator2);
         controlPanel.appendChild(autoSendBtn);
-        controlPanel.appendChild(separator3);
         controlPanel.appendChild(collapseBtn);
         document.body.appendChild(controlPanel);
 
