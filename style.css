@@ -394,6 +394,7 @@ body.yummy-selection-mode-active {
 
 /* 1. 通用外观样式 */
 #yummy-copy-toast {
+    position: fixed; /* 改为 fixed 定位，使其相对于视口，而不是任何父容器 */
     display: flex;
     align-items: center;
     gap: 8px;
@@ -412,14 +413,13 @@ body.yummy-selection-mode-active {
     transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out, visibility 0.3s;
 }
 
-/* 2. "面板内固定" 模式 */
-#yummy-copy-toast.yummy-toast-panel-mode {
-    position: absolute;
-    bottom: 65px;
+/* 2. "屏幕居中" 模式 (替换旧的 "面板内固定" 模式) */
+#yummy-copy-toast.yummy-toast-center-mode {
+    top: 50px; /* 从顶部 50px 的位置出现 */
     left: 50%;
-    transform: translate(-50%, 10px); /* 初始位置在下方 */
+    transform: translate(-50%, -20px); /* 初始位置在上方，为滑入动画做准备 */
 }
-#yummy-copy-toast.yummy-toast-panel-mode.visible {
+#yummy-copy-toast.yummy-toast-center-mode.visible {
     visibility: visible;
     opacity: 1;
     transform: translate(-50%, 0); /* 滑入到最终位置 */
@@ -909,4 +909,85 @@ body.yummy-selection-mode-active {
     margin: 6px 0;
     padding: 0;
     cursor: default;
+}
+
+/* --- Global Alert Box --- */
+.yummy-global-alert-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.4);
+    z-index: 10005;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0s 0.2s;
+}
+
+.yummy-global-alert-overlay.visible {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.2s ease, visibility 0s 0s;
+}
+
+.yummy-global-alert-box {
+    background-color: white;
+    padding: 24px;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    width: 90%;
+    max-width: 400px;
+    transform: scale(0.95);
+    transition: transform 0.2s ease;
+}
+
+.yummy-global-alert-overlay.visible .yummy-global-alert-box {
+    transform: scale(1);
+}
+
+.yummy-global-alert-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #111827;
+    margin: 0 0 12px 0;
+}
+
+.yummy-global-alert-message {
+    font-size: 15px;
+    line-height: 1.6;
+    color: #374151;
+    margin: 0;
+    white-space: pre-wrap; /* To respect \n */
+}
+
+.yummy-global-alert-details {
+    font-size: 13px;
+    color: #6b7280;
+    margin: 12px 0 0 0;
+    white-space: pre-wrap; /* To respect \n */
+}
+
+.yummy-global-alert-footer {
+    margin-top: 24px;
+    text-align: right;
+}
+
+.yummy-global-alert-button {
+    background-color: #3b82f6;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.yummy-global-alert-button:hover {
+    background-color: #2563eb;
 }

@@ -211,6 +211,7 @@
     let isPanelAnimating = false;
     let collectionItemStates = new Map();
 
+    let globalAlert = null;
     // vNext: 指令菜单所需的状态变量
     let instructionMenu = null;
     let isInstructionMenuVisible = false;
@@ -299,10 +300,41 @@
         return prompt ? prompt : null;
     }
 
+    function injectAndSendPrompt(promptText) {
+        const inputBox = document.querySelector('div#prompt-textarea');
+        if (!inputBox) {
+            showToast('Yummy错误：\n找不到输入框！');
+            return;
+        }
+
+        let p = inputBox.querySelector('p');
+        if (!p) {
+            p = document.createElement('p');
+            inputBox.innerHTML = '';
+            inputBox.appendChild(p);
+        }
+        p.innerText = promptText;
+
+        if (p.classList.contains('placeholder')) {
+            p.classList.remove('placeholder');
+        }
+
+        inputBox.dispatchEvent(new Event('input', { bubbles: true }));
+
+        setTimeout(() => {
+            const sendButton = document.querySelector('button[data-testid*="send"]:not(:disabled)');
+            if (sendButton) {
+                sendButton.click();
+            } else {
+                logger.warn('自动发送失败：找不到发送按钮。');
+            }
+        }, 200);
+    }
+
     function openInstructionMenuWithContent(aggregatedContent) {
         const inputBox = document.querySelector('div#prompt-textarea');
         if (!inputBox) {
-            alert('Yummy错误：\n找不到输入框！');
+            showToast('Yummy错误：\n找不到输入框！');
             return;
         }
 
@@ -567,7 +599,12 @@
 
         const range = selection.getRangeAt(0);
         const parentElement = range.commonAncestorContainer.parentElement;
-        if (!parentElement.closest('main') || parentElement.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-collection-panel, #yummy-quick-highlight-button')) {
+        
+        // 核心逻辑修改：确保选中的内容必须位于AI助手的回复内，才显示高亮按钮。
+        const isInsideAssistantMessage = parentElement.closest('[data-message-author-role="assistant"]');
+        const isInsideYummyUI = parentElement.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-collection-panel, #yummy-quick-highlight-button');
+
+        if (!isInsideAssistantMessage || isInsideYummyUI) {
             if (quickHighlightButton) quickHighlightButton.style.display = 'none';
             return;
         }
@@ -831,33 +868,44 @@
         aggregateBtn.textContent = '✨';
         aggregateBtn.title = '聚合评价 (单击: 最新, Shift+单击: 全部)';
         aggregateBtn.addEventListener('click', (e) => {
-            if (isInstructionMenuVisible) {
-                hideInstructionMenu();
-                return;
-            }
-
             const isGlobal = e.shiftKey;
             const scope = isGlobal ?
                 document.body :
                 Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).pop()?.closest('.group\\/turn-messages');
 
             if (!scope) {
-                alert('Yummy错误：\n找不到任何AI回复内容可供处理。');
+                showGlobalAlert({
+                    title: 'Yummy错误',
+                    message: '找不到任何AI回复内容可供处理。'
+                });
                 return;
             }
 
             const aggregatedContent = generateAggregatePrompt(scope);
 
             if (!aggregatedContent) {
-                const message = isGlobal ?
-                    'Yummy提示：\n在整个页面中没有找到任何"喜欢"或"不喜欢"的内容。' :
-                    'Yummy提示：\n在最新的AI回复中没有找到任何"喜欢"或"不喜欢"的内容。\n\n（小技巧：按住Shift再点击，可以处理整个页面的内容）';
-                alert(message);
+                const message = '在最新一轮的AI回复中没有找到任何"喜欢"、"不喜欢"或"高亮"的内容。';
+                const details = '（小技巧：按住Shift再点击按钮，可以处理整个会话历史的标记内容）';
+                showGlobalAlert({
+                    title: 'Yummy提示',
+                    message: message,
+                    details: isGlobal ? '' : details
+                });
                 return;
             }
-            
-            openInstructionMenuWithContent(aggregatedContent);
-        });
+
+            if (isAutoSendActive) {
+                const defaultInstruction = INSTRUCTIONS[0].instruction;
+                const finalPrompt = `${aggregatedContent}\n\n${defaultInstruction}`;
+                injectAndSendPrompt(finalPrompt);
+            } else {
+                if (isInstructionMenuVisible) {
+                    hideInstructionMenu();
+                } else {
+                    openInstructionMenuWithContent(aggregatedContent);
+                }
+            }
+         });
 
         const autoSendBtn = document.createElement('button');
         autoSendBtn.className = 'yummy-control-button';
@@ -1066,7 +1114,7 @@
         copyToast.id = 'yummy-copy-toast';
         const toastText = document.createElement('span');
         copyToast.appendChild(toastText);
-        collectionPanel.appendChild(copyToast);
+        document.body.appendChild(copyToast);
 
         collectionPanel.addEventListener('transitionstart', (event) => {
             if (event.propertyName === 'right') {
@@ -1082,6 +1130,48 @@
         previewTooltip = document.createElement('div');
         previewTooltip.id = 'yummy-preview-tooltip';
         document.body.appendChild(previewTooltip);
+    }
+
+    function createGlobalAlert() {
+        if (globalAlert) return;
+        globalAlert = document.createElement('div');
+        globalAlert.className = 'yummy-global-alert-overlay';
+        globalAlert.innerHTML = `
+            <div class="yummy-global-alert-box">
+                <h3 class="yummy-global-alert-title"></h3>
+                <p class="yummy-global-alert-message"></p>
+                <p class="yummy-global-alert-details"></p>
+                <div class="yummy-global-alert-footer">
+                    <button class="yummy-global-alert-button">明白啦！</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(globalAlert);
+
+        globalAlert.querySelector('.yummy-global-alert-button').addEventListener('click', hideGlobalAlert);
+        globalAlert.addEventListener('click', (e) => {
+            if (e.target === globalAlert) {
+                hideGlobalAlert();
+            }
+        });
+    }
+
+    function showGlobalAlert({ title, message, details = '' }) {
+        if (!globalAlert) createGlobalAlert();
+        globalAlert.querySelector('.yummy-global-alert-title').textContent = title;
+        globalAlert.querySelector('.yummy-global-alert-message').textContent = message;
+        
+        const detailsEl = globalAlert.querySelector('.yummy-global-alert-details');
+        detailsEl.textContent = details;
+        detailsEl.style.display = details ? 'block' : 'none';
+
+        globalAlert.classList.add('visible');
+    }
+
+    function hideGlobalAlert() {
+        if (globalAlert) {
+            globalAlert.classList.remove('visible');
+        }
     }
 
     function createInstructionMenu() {
@@ -1267,6 +1357,7 @@
             }
 
             createUiElements();
+            createGlobalAlert();
             createInstructionMenu(); // vNext: 提前创建好菜单DOM
             document.addEventListener('mouseup', handleTextSelection);
             document.addEventListener('keydown', quickExitSelectionMode);
