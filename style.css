@@ -812,7 +812,7 @@ body.yummy-selection-mode-active {
 #yummy-instruction-menu {
     position: fixed;
     z-index: 10002;
-    width: 240px;
+    width: 230px;
     background-color: rgba(249, 250, 251, 0.98);
     border: 1px solid #e5e7eb;
     border-radius: 12px;
@@ -846,6 +846,10 @@ body.yummy-selection-mode-active {
     font-size: 14px;
     font-weight: 600;
     color: #111827;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    width: 100%;
 }
 
 .yummy-instruction-close-btn {
@@ -870,9 +874,16 @@ body.yummy-selection-mode-active {
     overflow-y: auto;
 }
 
+.yummy-hint-text {
+    color: #9ca3af;
+    font-size: 12px;
+    font-weight: 400;
+}
+
 .yummy-instruction-item {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 10px;
     padding: 8px 10px;
     border-radius: 6px;

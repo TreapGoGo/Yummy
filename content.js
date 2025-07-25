@@ -221,10 +221,10 @@
     const INSTRUCTIONS = [
         { label: '举一反三', instruction: '请基于我喜欢的部分，再多提供几个类似的例子或观点。', emoji: '1️⃣' },
         { label: '综合优化', instruction: '请综合我的偏好，优化你刚才的回答。', emoji: '2️⃣' },
-        { label: '风格迁移', instruction: '请模仿我喜欢的语句风格，改写我不喜欢的部分。', emoji: '3️⃣' },
-        { label: '提炼要点', instruction: '请从我喜欢的内容中，提炼出核心要点，并以列表形式呈现。', emoji: '4️⃣' },
-        { label: '批判性思考', instruction: '请针对我喜欢的内容，提出一些挑战性的问题或反方观点。', emoji: '5️⃣' },
-        { label: '融合成文', instruction: '请将我标记为喜欢的所有内容，无缝地整合成一段连贯的文字。', emoji: '6️⃣' }
+        { label: '批判性思考', instruction: '请针对我喜欢的内容，提出一些挑战性的问题或反方观点。', emoji: '3️⃣' },
+        { label: '融合成文', instruction: '请将我标记为喜欢的所有内容，无缝地整合成一段连贯的文字。', emoji: '4️⃣' },
+        { label: '提炼要点', instruction: '请从我喜欢的内容中，提炼出核心要点，并以列表形式呈现。', emoji: '5️⃣' },
+        { label: '风格迁移', instruction: '请模仿我喜欢的语句风格，改写我不喜欢的部分。', emoji: '6️⃣' }
     ];
 
     function flashElement(element) {
@@ -1090,7 +1090,7 @@
         header.className = 'yummy-instruction-header';
         
         const title = document.createElement('h3');
-        title.textContent = '选择指令';
+        title.innerHTML = `选择指令 <span class="yummy-hint-text">(↑↓键切换)</span>`;
         
         const closeBtn = document.createElement('span');
         closeBtn.className = 'yummy-instruction-close-btn';
@@ -1108,7 +1108,7 @@
             const item = document.createElement('li');
             item.className = 'yummy-instruction-item';
             item.dataset.index = index;
-            item.innerHTML = `<span class="emoji">${instr.emoji}</span> ${instr.label}`;
+            item.innerHTML = `<span><span class="emoji">${instr.emoji}</span> ${instr.label}</span>`;
             
             item.addEventListener('mouseenter', () => {
                 updateInstructionSelection(index);
@@ -1127,7 +1127,7 @@
         const customItem = document.createElement('li');
         customItem.className = 'yummy-instruction-item';
         customItem.dataset.index = INSTRUCTIONS.length;
-        customItem.innerHTML = `<span class="emoji">✏️</span> 自定义指令...`;
+        customItem.innerHTML = `<span><span class="emoji">✏️</span> 自定义指令...</span> <span class="yummy-hint-text">(Backspace)</span>`;
         customItem.addEventListener('mouseenter', () => {
             updateInstructionSelection(INSTRUCTIONS.length);
         });
@@ -1230,8 +1230,13 @@
             case 'Backspace':
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                newIndex = INSTRUCTIONS.length; // 跳转到“自定义”
-                break;
+                // 切换到“自定义指令”模式，这会清除输入框中的预设指令
+                updateInstructionSelection(INSTRUCTIONS.length);
+                // 延迟关闭菜单，为用户提供视觉反馈
+                setTimeout(() => {
+                    hideInstructionMenu();
+                }, 300);
+                return;
             default:
                 // 数字快捷键
                 const num = parseInt(e.key, 10);
@@ -1280,7 +1285,14 @@
                 // vNext: 点击菜单外部时关闭菜单
                 if (isInstructionMenuVisible && instructionMenu && !instructionMenu.contains(event.target)) {
                     const aggregateBtn = document.getElementById('yummy-aggregate-btn');
-                    if (!aggregateBtn || !aggregateBtn.contains(event.target)) {
+                    if (aggregateBtn && aggregateBtn.contains(event.target)) {
+                        // 点击聚合按钮本身由其自己的监听器处理，此处不作操作。
+                        return;
+                    }
+                    
+                    // 只有当输入框内容为空时，点击外部才关闭菜单，以防止误触。
+                    const inputBox = document.querySelector('div#prompt-textarea');
+                    if (!inputBox || inputBox.innerText.trim() === '') {
                        hideInstructionMenu();
                     }
                 }
