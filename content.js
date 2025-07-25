@@ -15,6 +15,12 @@
 (function() {
     'use strict';
 
+    const STORAGE_KEY_PREFIX = 'yummy_conversation_';
+    let currentConversationId = null;
+    let currentConversationState = {};
+    let messageElementsCache = new Map();
+
+
     // 通过检查 `update_url` (一个只在发布版 manifest.json 中存在的字段) 来判断扩展是否处于本地解压的开发模式。
     const isDevMode = !('update_url' in chrome.runtime.getManifest());
 
@@ -38,8 +44,67 @@
 
     let syncCollectionPanelWithDOM = () => logger.warn('syncCollectionPanelWithDOM not implemented yet');
 
-    function applyHierarchicalState(targetElement, state) {
+    function getConversationId() {
+        const match = window.location.pathname.match(/\/c\/([a-zA-Z0-9-]+)/);
+        return match ? match[1] : null;
+    }
+    
+    function getStableElementId(element) {
+        const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+        const messageIndex = assistantMessages.findIndex(msg => msg.contains(element));
+        
+        if (messageIndex === -1) return null;
+    
+        const key = `message-${messageIndex}`;
+        let elementsInMessage;
+    
+        if (messageElementsCache.has(key)) {
+            elementsInMessage = messageElementsCache.get(key);
+        } else {
+            elementsInMessage = Array.from(assistantMessages[messageIndex].querySelectorAll(CONTENT_ELEMENTS_SELECTOR));
+            messageElementsCache.set(key, elementsInMessage);
+        }
+    
+        const elementIndex = elementsInMessage.findIndex(el => el === element);
+        
+        return elementIndex > -1 ? `yummy-m${messageIndex}-e${elementIndex}` : null;
+    }
+    
+    async function saveData(elementId, data) {
+        if (!currentConversationId || !elementId) return;
+    
+        // Update local state first
+        if (data) {
+            currentConversationState[elementId] = { ...currentConversationState[elementId], ...data };
+        } else {
+            delete currentConversationState[elementId]; // Handles removal of markings
+        }
+    
+        // Clean up empty objects
+        if (currentConversationState[elementId] && Object.keys(currentConversationState[elementId]).length === 0) {
+            delete currentConversationState[elementId];
+        }
+    
+        try {
+            const storageKey = `${STORAGE_KEY_PREFIX}${currentConversationId}`;
+            if (Object.keys(currentConversationState).length > 0) {
+                await chrome.storage.local.set({ [storageKey]: currentConversationState });
+                logger.debug(`Data saved for ${elementId}`, currentConversationState[elementId]);
+            } else {
+                // If the last marking is removed, clean up the entire entry from storage
+                await chrome.storage.local.remove(storageKey);
+                logger.debug(`Conversation ${currentConversationId} has no markings, removed from storage.`);
+            }
+        } catch (error) {
+            logger.error('Failed to save data to chrome.storage.local:', error);
+        }
+    }
+
+
+    async function applyHierarchicalState(targetElement, state) {
+        const elementId = getStableElementId(targetElement);
         const descendantSelector = 'p, h1, h2, h3, h4, h5, h6, li';
+        
         targetElement.classList.remove('yummy-liked', 'yummy-disliked');
         const descendants = targetElement.querySelectorAll(descendantSelector);
         descendants.forEach(d => d.classList.remove('yummy-liked', 'yummy-disliked'));
@@ -47,9 +112,13 @@
         if (state === 'liked') {
             targetElement.classList.add('yummy-liked');
             descendants.forEach(d => d.classList.add('yummy-liked'));
+            if(elementId) await saveData(elementId, { rating: 'liked' });
         } else if (state === 'disliked') {
             targetElement.classList.add('yummy-disliked');
             descendants.forEach(d => d.classList.add('yummy-disliked'));
+            if(elementId) await saveData(elementId, { rating: 'disliked' });
+        } else { // state === 'none'
+             if(elementId) await saveData(elementId, { rating: null });
         }
         logger.debug(`已将状态 '${state}' 应用到元素及其子项。`, targetElement);
         syncCollectionPanelWithDOM();
@@ -74,20 +143,23 @@
             const indentation = containerRect.left - turnContainerRect.left;
             const baseLeftOffset = -85;
             ratingBar.style.left = `${baseLeftOffset - indentation}px`;
+        } else {
+            // Fallback for elements not inside a turn container, though less likely.
+            ratingBar.style.left = '-85px';
         }
 
         const likeButton = document.createElement('span');
         likeButton.className = 'yummy-rating-button';
         likeButton.textContent = EMOJI_LIKE;
         likeButton.title = '想吃 (Like)';
-        likeButton.addEventListener('click', (e) => {
+        likeButton.addEventListener('click', async (e) => {
             e.stopPropagation();
             const isParent = /H[1-6]/.test(element.tagName);
             if (isParent) {
-                handleParentRating(element, 'liked');
+                await handleParentRating(element, 'liked');
             } else {
                 const isAlreadyLiked = element.classList.contains('yummy-liked');
-                applyHierarchicalState(element, isAlreadyLiked ? 'none' : 'liked');
+                await applyHierarchicalState(element, isAlreadyLiked ? 'none' : 'liked');
             }
         });
 
@@ -95,14 +167,14 @@
         dislikeButton.className = 'yummy-rating-button';
         dislikeButton.textContent = EMOJI_DISLIKE;
         dislikeButton.title = '想吐 (Dislike)';
-        dislikeButton.addEventListener('click', (e) => {
+        dislikeButton.addEventListener('click', async (e) => {
             e.stopPropagation();
             const isParent = /H[1-6]/.test(element.tagName);
             if (isParent) {
-                handleParentRating(element, 'disliked');
+                await handleParentRating(element, 'disliked');
             } else {
                 const isAlreadyDisliked = element.classList.contains('yummy-disliked');
-                applyHierarchicalState(element, isAlreadyDisliked ? 'none' : 'disliked');
+                await applyHierarchicalState(element, isAlreadyDisliked ? 'none' : 'disliked');
             }
         });
 
@@ -113,10 +185,29 @@
 
     const CONTENT_ELEMENTS_SELECTOR = `[data-message-author-role="assistant"] h1, [data-message-author-role="assistant"] h2, [data-message-author-role="assistant"] h3, [data-message-author-role="assistant"] h4, [data-message-author-role="assistant"] h5, [data-message-author-role="assistant"] h6, [data-message-author-role="assistant"] p, [data-message-author-role="assistant"] pre, [data-message-author-role="assistant"] li, [data-message-author-role="assistant"] table`;
 
-    function processNewElements() {
-        document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR).forEach(element => {
-            if (!element.dataset.yummyProcessed) addRatingBar(element);
-        });
+    async function processNewElements() {
+        const elements = document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR);
+        for (const element of elements) {
+            if (!element.dataset.yummyProcessed) {
+                addRatingBar(element);
+                // After adding the bar, check if saved state needs to be applied
+                const elementId = getStableElementId(element);
+                if (elementId && currentConversationState[elementId]) {
+                    const savedData = currentConversationState[elementId];
+                    if (savedData.rating) {
+                        await applyHierarchicalState(element, savedData.rating);
+                    }
+                    if (savedData.highlight) {
+                        // Use innerHTML to restore highlights
+                        element.innerHTML = savedData.highlight;
+                        // Re-attach event listeners to restored highlights
+                        element.querySelectorAll('.yummy-selection-highlight').forEach(span => {
+                           span.addEventListener('click', async () => await unhighlightElement(span));
+                        });
+                    }
+                }
+            }
+        }
         syncCollectionPanelWithDOM();
     }
 
@@ -145,7 +236,7 @@
         return results;
     }
 
-    function handleParentRating(parentElement, newRating) {
+    async function handleParentRating(parentElement, newRating) {
         const state = parentClickState.get(parentElement) || {
             rating: 'none',
             level: 0
@@ -155,27 +246,27 @@
         if (newRating === state.rating) {
             if (state.level === 1) {
                 state.level = 2;
-                children.forEach(child => applyHierarchicalState(child, newRating));
+                for (const child of children) { await applyHierarchicalState(child, newRating); }
                 logger.debug(`块状评价 (二次点击): ${newRating}`, parentElement);
             } else {
                 state.rating = 'none';
                 state.level = 0;
-                applyHierarchicalState(parentElement, 'none');
-                children.forEach(child => applyHierarchicalState(child, 'none'));
+                await applyHierarchicalState(parentElement, 'none');
+                for (const child of children) { await applyHierarchicalState(child, 'none'); }
                 logger.debug(`块状评价 (取消): none`, parentElement);
             }
         } else {
             if (state.level === 2) {
                 state.rating = newRating;
-                applyHierarchicalState(parentElement, newRating);
-                children.forEach(child => applyHierarchicalState(child, newRating));
+                await applyHierarchicalState(parentElement, newRating);
+                for (const child of children) { await applyHierarchicalState(child, newRating); }
                 logger.debug(`块状评价 (翻转): ${newRating}`, parentElement);
             } else {
                 state.rating = newRating;
                 state.level = 1;
-                applyHierarchicalState(parentElement, 'none');
-                children.forEach(child => applyHierarchicalState(child, 'none'));
-                applyHierarchicalState(parentElement, newRating);
+                await applyHierarchicalState(parentElement, 'none');
+                for (const child of children) { await applyHierarchicalState(child, 'none'); }
+                await applyHierarchicalState(parentElement, newRating);
                 children.forEach(child => flashElement(child));
                 logger.debug(`块状评价 (首次点击): ${newRating}`, parentElement);
             }
@@ -186,8 +277,9 @@
     let debounceTimer = null;
     const debouncedProcessNewElements = () => {
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            processNewElements();
+        debounceTimer = setTimeout(async () => {
+            messageElementsCache.clear(); // Clear cache before processing
+            await processNewElements();
         }, 500);
     };
 
@@ -490,7 +582,7 @@
         return fragment;
     }
 
-    function highlightSelection(range) {
+    async function highlightSelection(range) {
         const selection = window.getSelection();
         const effectiveRange = range || (selection.rangeCount > 0 ? selection.getRangeAt(0) : null);
 
@@ -510,35 +602,42 @@
         }
 
         try {
-            const mergedRange = mergeWithExistingHighlights(effectiveRange);
+            const mergedRange = await mergeWithExistingHighlights(effectiveRange);
             const allBlocks = Array.from(document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR));
-            const intersectingBlocks = allBlocks.filter(block =>
-                mergedRange.intersectsNode(block) &&
-                !block.classList.contains('yummy-selection-highlight')
-            );
+            const intersectingBlocks = new Set();
+            allBlocks.forEach(block => {
+                if (mergedRange.intersectsNode(block)) {
+                    intersectingBlocks.add(getContainingBlock(block) || block);
+                }
+            });
 
-            if (intersectingBlocks.length === 0 && parentElement && mergedRange.intersectsNode(parentElement)) {
+            if (intersectingBlocks.size === 0 && parentElement && mergedRange.intersectsNode(parentElement)) {
                 const singleBlock = getContainingBlock(parentElement);
-                if (singleBlock) intersectingBlocks.push(singleBlock);
+                if (singleBlock) intersectingBlocks.add(singleBlock);
             }
 
             for (const block of intersectingBlocks) {
                 const blockRange = document.createRange();
                 blockRange.selectNodeContents(block);
-
+                
                 const start = mergedRange.compareBoundaryPoints(Range.START_TO_START, blockRange) > 0 ? mergedRange.startContainer : blockRange.startContainer;
                 const startOffset = mergedRange.compareBoundaryPoints(Range.START_TO_START, blockRange) > 0 ? mergedRange.startOffset : blockRange.startOffset;
                 const end = mergedRange.compareBoundaryPoints(Range.END_TO_END, blockRange) < 0 ? mergedRange.endContainer : blockRange.endContainer;
                 const endOffset = mergedRange.compareBoundaryPoints(Range.END_TO_END, blockRange) < 0 ? mergedRange.endOffset : blockRange.endOffset;
-
+                
                 const intersectionRange = document.createRange();
-                intersectionRange.setStart(start, startOffset);
-                intersectionRange.setEnd(end, endOffset);
+                try {
+                    intersectionRange.setStart(start, startOffset);
+                    intersectionRange.setEnd(end, endOffset);
+                } catch (rangeError) {
+                    logger.warn("Error setting intersection range, skipping block.", rangeError);
+                    continue; // Skip this block if range is invalid
+                }
 
                 if (!intersectionRange.collapsed) {
                     const highlightSpan = document.createElement('span');
                     highlightSpan.className = 'yummy-selection-highlight';
-                    highlightSpan.addEventListener('click', () => unhighlightElement(highlightSpan));
+                    highlightSpan.addEventListener('click', async () => await unhighlightElement(highlightSpan));
 
                     const selectedContents = intersectionRange.extractContents();
                     cleanFragment(selectedContents);
@@ -551,12 +650,24 @@
         } finally {
             if (selection.rangeCount > 0) selection.removeAllRanges();
         }
+
+        // After highlighting, save the state of all affected blocks
+        document.querySelectorAll('.yummy-selection-highlight').forEach(async (highlight) => {
+            const parentBlock = getContainingBlock(highlight);
+            if(parentBlock) {
+                const elementId = getStableElementId(parentBlock);
+                if(elementId) {
+                    await saveData(elementId, { highlight: parentBlock.innerHTML });
+                }
+            }
+        });
+
         syncCollectionPanelWithDOM();
     }
 
-    function mergeWithExistingHighlights(newRange) {
+    async function mergeWithExistingHighlights(newRange) {
         const highlights = document.querySelectorAll('.yummy-selection-highlight');
-        highlights.forEach(highlight => {
+        for (const highlight of highlights) {
             const highlightRange = document.createRange();
             highlightRange.selectNodeContents(highlight);
 
@@ -567,20 +678,34 @@
                 if (newRange.compareBoundaryPoints(Range.END_TO_END, highlightRange) < 0) {
                     newRange.setEnd(highlightRange.endContainer, highlightRange.endOffset);
                 }
-                unhighlightElement(highlight);
+                await unhighlightElement(highlight);
             }
-        });
+        }
         return newRange;
     }
 
-    function unhighlightElement(element) {
+    async function unhighlightElement(element) {
         if (!element || !element.parentNode) return;
+        
+        const parentBlock = getContainingBlock(element);
         const parent = element.parentNode;
+        
         while (element.firstChild) {
             parent.insertBefore(element.firstChild, element);
         }
         parent.removeChild(element);
         parent.normalize();
+    
+        // After un-highlighting, save the new state of the parent block
+        if (parentBlock) {
+            const elementId = getStableElementId(parentBlock);
+            if (elementId) {
+                // If there are no more highlights in the block, remove the highlight data.
+                const remainingHighlights = parentBlock.querySelector('.yummy-selection-highlight');
+                await saveData(elementId, { highlight: remainingHighlights ? parentBlock.innerHTML : null });
+            }
+        }
+        
         logger.info('高亮已移除。');
         syncCollectionPanelWithDOM();
     }
@@ -1098,10 +1223,10 @@
         quickHighlightButton.textContent = EMOJI_LIKE;
         quickHighlightButton.title = '高亮选中内容';
         document.body.appendChild(quickHighlightButton);
-        quickHighlightButton.addEventListener('mousedown', (e) => {
+        quickHighlightButton.addEventListener('mousedown', async (e) => {
             e.preventDefault();
             e.stopPropagation();
-            highlightSelection(lastSelectionRange);
+            await highlightSelection(lastSelectionRange);
             quickHighlightButton.style.display = 'none';
         });
 
@@ -1420,6 +1545,52 @@
         }
     }
 
+    async function loadDataForConversation(conversationId) {
+        if (!conversationId) {
+            currentConversationState = {};
+            return;
+        }
+        try {
+            const storageKey = `${STORAGE_KEY_PREFIX}${conversationId}`;
+            const result = await chrome.storage.local.get(storageKey);
+            currentConversationState = result[storageKey] || {};
+            logger.info(`Loaded data for conversation ${conversationId}:`, currentConversationState);
+            // After loading, re-process elements to apply the loaded state
+            messageElementsCache.clear();
+            await processNewElements();
+        } catch (error) {
+            logger.error('Failed to load data from chrome.storage.local:', error);
+            currentConversationState = {};
+        }
+    }
+    
+    let lastUrl = window.location.href;
+    
+    async function handleUrlChange() {
+        const newUrl = window.location.href;
+        if (newUrl !== lastUrl) {
+            lastUrl = newUrl;
+            messageElementsCache.clear(); // Clear cache on URL change
+            const newConversationId = getConversationId();
+            if (newConversationId !== currentConversationId) {
+                logger.info(`Conversation changed from ${currentConversationId} to ${newConversationId}`);
+                currentConversationId = newConversationId;
+                await loadDataForConversation(currentConversationId);
+            }
+        }
+    }
+    
+    async function initializePersistence() {
+        currentConversationId = getConversationId();
+        await loadDataForConversation(currentConversationId);
+    
+        // Listen for URL changes to handle SPA navigation
+        new MutationObserver(handleUrlChange).observe(document.body, { childList: true, subtree: true });
+        // Also check on popstate (browser back/forward buttons)
+        window.addEventListener('popstate', handleUrlChange);
+    }
+    
+
     function initializeYummy() {
         try {
             observer.observe(document.body, {
@@ -1443,7 +1614,7 @@
                 // DOM is stable now for a longer period.
                 // Double requestAnimationFrame to wait for next paint cycle.
                 requestAnimationFrame(() => {
-                    requestAnimationFrame(() => {
+                    requestAnimationFrame(async () => {
                         if (isInitialized) return;
                         isInitialized = true;
                         
@@ -1453,6 +1624,7 @@
                         // Now, safely initialize all features.
                         try {
                             initializeFeatures();
+                            await initializePersistence(); // Initialize persistence logic
                             initializeYummy(); // This sets up the main, long-term observer
                             logger.info("Yummy! 插件已成功初始化。");
                         } catch (e) {
