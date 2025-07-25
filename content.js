@@ -276,59 +276,39 @@
         const dislikedText = Array.from(dislikedItems).join('\n');
 
         if (likedText) {
-            prompt += `在你刚刚生成的内容中，我喜欢的语句有：\n${likedText}\n\n`;
+            prompt += `在你刚刚生成的内容中，我喜欢的语句有：\n${likedText}`;
         }
 
         if (dislikedText) {
-            prompt += `我不喜欢的语句有：\n${dislikedText}\n\n`;
+            if (prompt) prompt += '\n\n';
+            prompt += `我不喜欢的语句有：\n${dislikedText}`;
         }
 
-        if (!prompt) {
-            return null;
-        }
-
-        const presetInstruction = "请你根据我所标记的上述内容进行拓展延伸";
-        prompt += presetInstruction;
-        
-        return { prompt, instructionLength: presetInstruction.length };
+        return prompt ? prompt : null;
     }
 
-    function injectAndSelectPrompt({ prompt, instructionLength }) {
+    function openInstructionMenuWithContent(aggregatedContent) {
         const inputBox = document.querySelector('div#prompt-textarea');
         if (!inputBox) {
             alert('Yummy错误：\n找不到输入框！');
             return;
         }
 
-        let p = inputBox.querySelector('p');
-        if (!p) {
-            p = document.createElement('p');
-            inputBox.innerHTML = '';
-            inputBox.appendChild(p);
-        }
+        let existingText = Array.from(inputBox.querySelectorAll('p')).map(p => p.innerText).join('\n');
 
-        // vNext: 智能追加逻辑
-        const existingText = Array.from(inputBox.querySelectorAll('p')).map(p => p.innerText).join('\n').trim();
-        const contentToInject = prompt.substring(0, prompt.length - instructionLength).trim();
+        const instructionParts = INSTRUCTIONS.map(i => i.instruction.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        const instructionRegex = new RegExp(`\\n\\n(?:${instructionParts.join('|')})$`);
+        
+        let baseText = existingText.replace(instructionRegex, '').trim();
 
-        let newText = existingText;
-        if (existingText && !existingText.includes(contentToInject)) {
-            newText += `\n\n${contentToInject}`;
-        } else if (!existingText) {
-            newText = contentToInject;
+        let newBaseText = baseText;
+        if (!baseText.includes(aggregatedContent)) {
+            newBaseText += (baseText ? '\n\n' : '') + aggregatedContent;
         }
         
-        aggregatedContentCache = newText; // 缓存聚合内容
-        p.innerText = newText;
-
-        if (p.classList.contains('placeholder')) {
-            p.classList.remove('placeholder');
-        }
-
-        inputBox.dispatchEvent(new Event('input', { bubbles: true }));
-        inputBox.focus();
-
-        showInstructionMenu(inputBox);
+        aggregatedContentCache = newBaseText;
+        
+        showInstructionMenu();
     }
 
     function stableScrollToBottom(scrollContainer) {
@@ -351,17 +331,26 @@
         }
 
         const baseContent = aggregatedContentCache;
-        const fullText = instructionText ? `${baseContent}\n\n${instructionText}` : (isCustom ? `${baseContent}\n` : baseContent);
+        let fullText;
+
+        if (isCustom) {
+            // 修复BUG：在末尾添加一个“零宽度空格”，以强制浏览器正确渲染两个换行符，并为光标提供可靠的定位锚点。
+            fullText = `${baseContent}\n\n\u200B`;
+        } else {
+            // 预设指令的情况保持不变。
+            fullText = instructionText ? `${baseContent}\n\n${instructionText}` : baseContent;
+        }
         
         p.innerText = fullText;
         inputBox.dispatchEvent(new Event('input', { bubbles: true }));
         inputBox.focus();
 
-        setTimeout(() => {
+        // 修复BUG：使用 requestAnimationFrame 替代 setTimeout，确保光标定位和滚动在DOM完全更新后执行。
+        requestAnimationFrame(() => {
             const selection = window.getSelection();
             if (!selection) return;
             const paragraph = inputBox.querySelector('p');
-            if (!paragraph || !paragraph.lastChild || paragraph.lastChild.nodeType !== Node.TEXT_NODE) return;
+            if (!paragraph || !paragraph.lastChild) return;
 
             const lastTextNode = paragraph.lastChild;
             const textContent = lastTextNode.textContent || '';
@@ -374,18 +363,20 @@
                     range.setEnd(lastTextNode, textContent.length);
                 }
             } else {
-                range.selectNodeContents(lastTextNode);
-                range.collapse(false); // 将光标定位到末尾
+                // 对于自定义情况，将光标定位在段落的末尾。
+                range.selectNodeContents(paragraph);
+                range.collapse(false);
             }
 
             selection.removeAllRanges();
             selection.addRange(range);
 
+            // 确保在光标定位后，滚动条稳定地滚动到底部。
             const scrollContainer = inputBox.closest('[class*="overflow-auto"]');
             if (scrollContainer) {
                 stableScrollToBottom(scrollContainer);
             }
-        }, 10);
+        });
     }
 
 
@@ -845,9 +836,9 @@
                 return;
             }
 
-            const result = generateAggregatePrompt(scope);
+            const aggregatedContent = generateAggregatePrompt(scope);
 
-            if (!result) {
+            if (!aggregatedContent) {
                 const message = isGlobal ?
                     'Yummy提示：\n在整个页面中没有找到任何"喜欢"或"不喜欢"的内容。' :
                     'Yummy提示：\n在最新的AI回复中没有找到任何"喜欢"或"不喜欢"的内容。\n\n（小技巧：按住Shift再点击，可以处理整个页面的内容）';
@@ -855,8 +846,7 @@
                 return;
             }
             
-            // vNext: 不再直接注入，而是调用新的注入逻辑来打开菜单
-            injectAndSelectPrompt(result);
+            openInstructionMenuWithContent(aggregatedContent);
         });
 
         const separator2 = document.createElement('hr');
@@ -1151,19 +1141,31 @@
         document.body.appendChild(instructionMenu);
     }
 
-    function showInstructionMenu(inputBoxElement) {
+    function showInstructionMenu() {
         if (!instructionMenu) createInstructionMenu();
         
-        const rect = inputBoxElement.getBoundingClientRect();
-        instructionMenu.style.left = `${rect.left - instructionMenu.offsetWidth - 15}px`;
+        const inputBox = document.querySelector('div#prompt-textarea');
+        if (!inputBox) {
+            logger.error("Yummy! 定位错误: 找不到输入框 #prompt-textarea");
+            return;
+        }
+
+        const anchorElement = inputBox.closest('form');
+        if (!anchorElement) {
+            logger.error("Yummy! 定位错误: 找不到作为锚点的 <form> 元素。");
+            return;
+        }
+
+        const rect = anchorElement.getBoundingClientRect();
         instructionMenu.style.top = `${rect.bottom - instructionMenu.offsetHeight}px`;
+        instructionMenu.style.left = `${rect.left - instructionMenu.offsetWidth - 15}px`;
         
         instructionMenu.classList.add('visible');
         isInstructionMenuVisible = true;
         
-        document.addEventListener('keydown', handleInstructionMenuKeys, true); // Use capture phase
+        document.addEventListener('keydown', handleInstructionMenuKeys, true);
         
-        updateInstructionSelection(0); // 默认选中第一个
+        updateInstructionSelection(0);
     }
 
     function hideInstructionMenu() {
