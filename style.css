@@ -808,5 +808,94 @@ body.yummy-selection-mode-active {
     color: #1a56d1;
 }
 
-/* --- Context Menu --- */
-/* vNext: 删除所有右键菜单样式 */
+/* --- Instruction Menu --- */
+#yummy-instruction-menu {
+    position: fixed;
+    z-index: 10002;
+    width: 240px;
+    background-color: rgba(249, 250, 251, 0.98);
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    visibility: hidden;
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+    transition: opacity 0.2s ease-out, transform 0.2s ease-out, visibility 0s 0.2s;
+    display: flex;
+    flex-direction: column;
+}
+
+#yummy-instruction-menu.visible {
+    visibility: visible;
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    transition: opacity 0.2s ease-out, transform 0.2s ease-out, visibility 0s 0s;
+}
+
+.yummy-instruction-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid #e5e7eb;
+    flex-shrink: 0;
+}
+
+.yummy-instruction-header h3 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #111827;
+}
+
+.yummy-instruction-close-btn {
+    cursor: pointer;
+    font-size: 20px;
+    color: #6b7280;
+    line-height: 1;
+    padding: 2px;
+    border-radius: 4px;
+}
+
+.yummy-instruction-close-btn:hover {
+    color: #111827;
+    background-color: #f3f4f6;
+}
+
+.yummy-instruction-list {
+    list-style: none;
+    padding: 8px;
+    margin: 0;
+    flex-grow: 1;
+    overflow-y: auto;
+}
+
+.yummy-instruction-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.15s ease-in-out, color 0.15s ease-in-out;
+    white-space: nowrap;
+}
+
+.yummy-instruction-item .emoji {
+    font-size: 16px;
+}
+
+.yummy-instruction-item.selected {
+    background-color: #e7f3fe;
+    color: #1c64f2;
+    font-weight: 500;
+}
+
+.yummy-instruction-item.yummy-separator {
+    height: 1px;
+    background-color: #e5e7eb;
+    margin: 6px 0;
+    padding: 0;
+    cursor: default;
+}

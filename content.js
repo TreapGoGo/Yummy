@@ -211,6 +211,22 @@
     let isPanelAnimating = false;
     let collectionItemStates = new Map();
 
+    // vNext: 指令菜单所需的状态变量
+    let instructionMenu = null;
+    let isInstructionMenuVisible = false;
+    let currentInstructionIndex = -1;
+    let aggregatedContentCache = ''; // 用于缓存聚合后的内容
+
+    // vNext: 预设指令集
+    const INSTRUCTIONS = [
+        { label: '举一反三', instruction: '请基于我喜欢的部分，再多提供几个类似的例子或观点。', emoji: '1️⃣' },
+        { label: '综合优化', instruction: '请综合我的偏好，优化你刚才的回答。', emoji: '2️⃣' },
+        { label: '风格迁移', instruction: '请模仿我喜欢的语句风格，改写我不喜欢的部分。', emoji: '3️⃣' },
+        { label: '提炼要点', instruction: '请从我喜欢的内容中，提炼出核心要点，并以列表形式呈现。', emoji: '4️⃣' },
+        { label: '批判性思考', instruction: '请针对我喜欢的内容，提出一些挑战性的问题或反方观点。', emoji: '5️⃣' },
+        { label: '融合成文', instruction: '请将我标记为喜欢的所有内容，无缝地整合成一段连贯的文字。', emoji: '6️⃣' }
+    ];
+
     function flashElement(element) {
         element.classList.add('yummy-flash');
         setTimeout(() => {
@@ -290,7 +306,21 @@
             inputBox.innerHTML = '';
             inputBox.appendChild(p);
         }
-        p.innerText = prompt;
+
+        // vNext: 智能追加逻辑
+        const existingText = Array.from(inputBox.querySelectorAll('p')).map(p => p.innerText).join('\n').trim();
+        const contentToInject = prompt.substring(0, prompt.length - instructionLength).trim();
+
+        let newText = existingText;
+        if (existingText && !existingText.includes(contentToInject)) {
+            newText += `\n\n${contentToInject}`;
+        } else if (!existingText) {
+            newText = contentToInject;
+        }
+        
+        aggregatedContentCache = newText; // 缓存聚合内容
+        p.innerText = newText;
+
         if (p.classList.contains('placeholder')) {
             p.classList.remove('placeholder');
         }
@@ -298,47 +328,66 @@
         inputBox.dispatchEvent(new Event('input', { bubbles: true }));
         inputBox.focus();
 
-        setTimeout(() => {
-           const selection = window.getSelection();
-           if (!selection) return;
-
-           const paragraph = document.querySelector('div#prompt-textarea p');
-           if (paragraph && paragraph.lastChild && paragraph.lastChild.nodeType === Node.TEXT_NODE) {
-               const lastTextNode = paragraph.lastChild;
-               const textContent = lastTextNode.textContent || '';
-               const selectionStart = textContent.length - instructionLength;
-
-               if (selectionStart >= 0) {
-                   const range = document.createRange();
-                   range.setStart(lastTextNode, selectionStart);
-                   range.setEnd(lastTextNode, textContent.length);
-    
-                   selection.removeAllRanges();
-                   selection.addRange(range);
-               } else {
-                   logger.warn(`无法设置选区，指令长度(${instructionLength})大于最后文本节点长度(${textContent.length})`);
-               }
-               
-               const scrollContainer = inputBox.closest('[class*="overflow-auto"]');
-               if (scrollContainer) {
-                    scrollContainer.scrollTop = scrollContainer.scrollHeight;
-               }
-            } else {
-                 logger.warn('无法设置选区，找不到预期的最后一个文本节点。');
-            }
-         }, 10);
-
-        if (isAutoSendActive) {
-            setTimeout(() => {
-                let sendButton = document.querySelector('button[data-testid*="send"]:not(:disabled), button[class*="send"]:not(:disabled)');
-                if (sendButton) {
-                    sendButton.click();
-                } else {
-                    logger.warn('自动发送失败：找不到发送按钮。');
-                }
-            }, 200);
-        }
+        showInstructionMenu(inputBox);
     }
+
+    function stableScrollToBottom(scrollContainer) {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                scrollContainer.scrollTop = scrollContainer.scrollHeight;
+            });
+        });
+    }
+
+    function updateInputBoxWithInstruction(instructionText = '', isCustom = false) {
+        const inputBox = document.querySelector('div#prompt-textarea');
+        if (!inputBox) return;
+
+        let p = inputBox.querySelector('p');
+        if (!p) {
+            p = document.createElement('p');
+            inputBox.innerHTML = '';
+            inputBox.appendChild(p);
+        }
+
+        const baseContent = aggregatedContentCache;
+        const fullText = instructionText ? `${baseContent}\n\n${instructionText}` : (isCustom ? `${baseContent}\n` : baseContent);
+        
+        p.innerText = fullText;
+        inputBox.dispatchEvent(new Event('input', { bubbles: true }));
+        inputBox.focus();
+
+        setTimeout(() => {
+            const selection = window.getSelection();
+            if (!selection) return;
+            const paragraph = inputBox.querySelector('p');
+            if (!paragraph || !paragraph.lastChild || paragraph.lastChild.nodeType !== Node.TEXT_NODE) return;
+
+            const lastTextNode = paragraph.lastChild;
+            const textContent = lastTextNode.textContent || '';
+            const range = document.createRange();
+
+            if (!isCustom && instructionText) {
+                const selectionStart = textContent.length - instructionText.length;
+                if (selectionStart >= 0) {
+                    range.setStart(lastTextNode, selectionStart);
+                    range.setEnd(lastTextNode, textContent.length);
+                }
+            } else {
+                range.selectNodeContents(lastTextNode);
+                range.collapse(false); // 将光标定位到末尾
+            }
+
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            const scrollContainer = inputBox.closest('[class*="overflow-auto"]');
+            if (scrollContainer) {
+                stableScrollToBottom(scrollContainer);
+            }
+        }, 10);
+    }
+
 
     let toastTimer = null;
     function showToast(message, event = null) {
@@ -781,6 +830,11 @@
         aggregateBtn.textContent = '✨';
         aggregateBtn.title = '聚合评价 (单击: 最新, Shift+单击: 全部)';
         aggregateBtn.addEventListener('click', (e) => {
+            if (isInstructionMenuVisible) {
+                hideInstructionMenu();
+                return;
+            }
+
             const isGlobal = e.shiftKey;
             const scope = isGlobal ?
                 document.body :
@@ -800,7 +854,8 @@
                 alert(message);
                 return;
             }
-
+            
+            // vNext: 不再直接注入，而是调用新的注入逻辑来打开菜单
             injectAndSelectPrompt(result);
         });
 
@@ -1035,6 +1090,164 @@
         document.body.appendChild(previewTooltip);
     }
 
+    function createInstructionMenu() {
+        if (instructionMenu) return;
+
+        instructionMenu = document.createElement('div');
+        instructionMenu.id = 'yummy-instruction-menu';
+        
+        const header = document.createElement('div');
+        header.className = 'yummy-instruction-header';
+        
+        const title = document.createElement('h3');
+        title.textContent = '选择指令';
+        
+        const closeBtn = document.createElement('span');
+        closeBtn.className = 'yummy-instruction-close-btn';
+        closeBtn.innerHTML = '&times;';
+        closeBtn.title = '关闭 (Esc)';
+        closeBtn.addEventListener('click', hideInstructionMenu);
+        
+        header.appendChild(title);
+        header.appendChild(closeBtn);
+        
+        const list = document.createElement('ul');
+        list.className = 'yummy-instruction-list';
+
+        INSTRUCTIONS.forEach((instr, index) => {
+            const item = document.createElement('li');
+            item.className = 'yummy-instruction-item';
+            item.dataset.index = index;
+            item.innerHTML = `<span class="emoji">${instr.emoji}</span> ${instr.label}`;
+            
+            item.addEventListener('mouseenter', () => {
+                updateInstructionSelection(index);
+            });
+            item.addEventListener('click', () => {
+                confirmInstructionSelection();
+            });
+
+            list.appendChild(item);
+        });
+
+        const separator = document.createElement('div');
+        separator.className = 'yummy-instruction-item yummy-separator';
+        list.appendChild(separator);
+
+        const customItem = document.createElement('li');
+        customItem.className = 'yummy-instruction-item';
+        customItem.dataset.index = INSTRUCTIONS.length;
+        customItem.innerHTML = `<span class="emoji">✏️</span> 自定义指令...`;
+        customItem.addEventListener('mouseenter', () => {
+            updateInstructionSelection(INSTRUCTIONS.length);
+        });
+        customItem.addEventListener('click', () => {
+            confirmInstructionSelection();
+        });
+        list.appendChild(customItem);
+        
+        instructionMenu.appendChild(header);
+        instructionMenu.appendChild(list);
+        document.body.appendChild(instructionMenu);
+    }
+
+    function showInstructionMenu(inputBoxElement) {
+        if (!instructionMenu) createInstructionMenu();
+        
+        const rect = inputBoxElement.getBoundingClientRect();
+        instructionMenu.style.left = `${rect.left - instructionMenu.offsetWidth - 15}px`;
+        instructionMenu.style.top = `${rect.bottom - instructionMenu.offsetHeight}px`;
+        
+        instructionMenu.classList.add('visible');
+        isInstructionMenuVisible = true;
+        
+        document.addEventListener('keydown', handleInstructionMenuKeys, true); // Use capture phase
+        
+        updateInstructionSelection(0); // 默认选中第一个
+    }
+
+    function hideInstructionMenu() {
+        if (instructionMenu) {
+            instructionMenu.classList.remove('visible');
+        }
+        isInstructionMenuVisible = false;
+        currentInstructionIndex = -1;
+        aggregatedContentCache = '';
+        document.removeEventListener('keydown', handleInstructionMenuKeys, true);
+    }
+
+    function updateInstructionSelection(index) {
+        if (!isInstructionMenuVisible) return;
+        
+        currentInstructionIndex = index;
+        
+        const items = instructionMenu.querySelectorAll('.yummy-instruction-item:not(.yummy-separator)');
+        items.forEach((item, i) => {
+            item.classList.toggle('selected', i === index);
+        });
+        
+        if (index >= 0 && index < INSTRUCTIONS.length) {
+            updateInputBoxWithInstruction(INSTRUCTIONS[index].instruction);
+        } else if (index === INSTRUCTIONS.length) { // 自定义
+            updateInputBoxWithInstruction('', true);
+        }
+    }
+
+    function confirmInstructionSelection() {
+        // 最终确认选择，此时输入框内容已经是正确的，只需要关闭菜单
+        hideInstructionMenu();
+    }
+
+    function handleInstructionMenuKeys(e) {
+        if (!isInstructionMenuVisible) return;
+
+        const totalItems = INSTRUCTIONS.length + 1; // +1 for custom
+        let newIndex = currentInstructionIndex;
+
+        switch(e.key) {
+            case 'ArrowUp':
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                newIndex = (currentInstructionIndex - 1 + totalItems) % totalItems;
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                newIndex = (currentInstructionIndex + 1) % totalItems;
+                break;
+            case 'Enter':
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                confirmInstructionSelection();
+                return; 
+            case 'Escape':
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                hideInstructionMenu();
+                return;
+            case 'Backspace':
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                newIndex = INSTRUCTIONS.length; // 跳转到“自定义”
+                break;
+            default:
+                // 数字快捷键
+                const num = parseInt(e.key, 10);
+                if (!isNaN(num) && num >= 1 && num <= INSTRUCTIONS.length) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    newIndex = num - 1;
+                } else {
+                    return; // 不是我们的快捷键，不处理
+                }
+        }
+        
+        if (newIndex !== currentInstructionIndex) {
+            updateInstructionSelection(newIndex);
+        }
+    }
+
+
     function initializeFeatures() {
         try {
             // Initialize the logger's UI first, so it's ready for any subsequent logs.
@@ -1043,6 +1256,7 @@
             }
 
             createUiElements();
+            createInstructionMenu(); // vNext: 提前创建好菜单DOM
             document.addEventListener('mouseup', handleTextSelection);
             document.addEventListener('keydown', quickExitSelectionMode);
             document.addEventListener('mousemove', onMouseMove);
@@ -1058,6 +1272,14 @@
                     if (!controlPanel || !controlPanel.contains(event.target)) {
                         collectionPanel.classList.remove('visible');
                         logger.debug('Clicked outside, hiding collection panel.');
+                    }
+                }
+
+                // vNext: 点击菜单外部时关闭菜单
+                if (isInstructionMenuVisible && instructionMenu && !instructionMenu.contains(event.target)) {
+                    const aggregateBtn = document.getElementById('yummy-aggregate-btn');
+                    if (!aggregateBtn || !aggregateBtn.contains(event.target)) {
+                       hideInstructionMenu();
                     }
                 }
             });
