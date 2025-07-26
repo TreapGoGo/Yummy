@@ -203,6 +203,10 @@
     const CONTENT_ELEMENTS_SELECTOR = `[data-message-author-role="assistant"] h1, [data-message-author-role="assistant"] h2, [data-message-author-role="assistant"] h3, [data-message-author-role="assistant"] h4, [data-message-author-role="assistant"] h5, [data-message-author-role="assistant"] h6, [data-message-author-role="assistant"] p, [data-message-author-role="assistant"] pre, [data-message-author-role="assistant"] li, [data-message-author-role="assistant"] table`;
 
     async function processNewElements() {
+        if (isUnHighlighting) {
+            logger.debug("processNewElements skipped due to un-highlighting lock.");
+            return;
+        }
         const elementsToProcess = document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR);
     
         for (const element of elementsToProcess) {
@@ -359,6 +363,7 @@
     let collectionItemStates = new Map();
     let isMarkdownMode = false; // 新增状态，控制面板显示模式
     let turndownService; // 用于转换 HTML 到 Markdown
+    let isUnHighlighting = false; // 新增：防止取消高亮时触发重绘的锁
 
     // --- Easter Egg State ---
     const likeClickTracker = new Map();
@@ -366,6 +371,7 @@
     let emptyCopyClickTimer = null;
 
     let globalAlert = null;
+    
     // vNext: 指令菜单所需的状态变量
     let instructionMenu = null;
     let isInstructionMenuVisible = false;
@@ -648,6 +654,57 @@
         return fragment;
     }
 
+    function normalizeHighlights(container) {
+        if (!container) return;
+        let hasChanges = true;
+        while (hasChanges) {
+            hasChanges = false;
+
+            // Pass 1: Unwrap nested highlights
+            const nested = container.querySelector('.yummy-selection-highlight .yummy-selection-highlight');
+            if (nested && nested.parentNode) {
+                const parent = nested.parentNode;
+                while (nested.firstChild) {
+                    parent.insertBefore(nested.firstChild, nested);
+                }
+                nested.remove();
+                hasChanges = true;
+                continue; 
+            }
+
+            // Pass 2: Merge adjacent highlights, even across formatting tags
+            const highlights = Array.from(container.querySelectorAll('.yummy-selection-highlight'));
+            for (const current of highlights) {
+                if (!current.parentNode) continue; 
+
+                let adjacent = current.nextSibling;
+                while (adjacent && adjacent.nodeType === Node.TEXT_NODE && adjacent.textContent.trim() === '') {
+                    adjacent = adjacent.nextSibling;
+                }
+
+                if (!adjacent || adjacent.nodeType !== Node.ELEMENT_NODE) continue;
+
+                if (adjacent.classList.contains('yummy-selection-highlight')) {
+                    while (adjacent.firstChild) current.appendChild(adjacent.firstChild);
+                    adjacent.remove();
+                    hasChanges = true;
+                    break;
+                }
+                
+                const childHighlights = adjacent.querySelectorAll('.yummy-selection-highlight');
+                const childText = Array.from(childHighlights).map(n => n.textContent).join('');
+                if (childHighlights.length > 0 && adjacent.textContent.trim() === childText.trim()) {
+                    while (adjacent.firstChild) current.appendChild(adjacent.firstChild);
+                    adjacent.remove();
+                    hasChanges = true;
+                    break;
+                }
+            }
+        }
+        container.normalize();
+    }
+
+
     async function highlightSelection(range) {
         const selection = window.getSelection();
         const effectiveRange = range || (selection.rangeCount > 0 ? selection.getRangeAt(0) : null);
@@ -657,153 +714,150 @@
             return;
         }
 
-        const parentElement = effectiveRange.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? effectiveRange.commonAncestorContainer : effectiveRange.commonAncestorContainer.parentElement;
-        const isInMainContent = parentElement.closest('main');
-        const isInsideYummyUI = parentElement.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-collection-panel');
+        const ancestor = effectiveRange.commonAncestorContainer;
+        const assistantMessageContainer = (ancestor.nodeType === Node.ELEMENT_NODE ? ancestor : ancestor.parentElement)
+            .closest('[data-message-author-role="assistant"]');
 
-        if (!isInMainContent || isInsideYummyUI) {
+        if (!assistantMessageContainer || (ancestor.nodeType === Node.ELEMENT_NODE && ancestor.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-collection-panel'))) {
             if (selection.rangeCount > 0) selection.removeAllRanges();
-            logger.debug('Selection outside of main content or inside UI, ignoring.');
             return;
         }
 
         try {
-            const mergedRange = await mergeWithExistingHighlights(effectiveRange);
-            const allBlocks = Array.from(document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR));
-            const intersectingBlocks = new Set();
-            allBlocks.forEach(block => {
-                if (mergedRange.intersectsNode(block)) {
-                    intersectingBlocks.add(getContainingBlock(block) || block);
-                }
+            const intersectingBlocks = Array.from(assistantMessageContainer.querySelectorAll(CONTENT_ELEMENTS_SELECTOR))
+                .filter(block => effectiveRange.intersectsNode(block) && !block.closest('.yummy-rating-bar'));
+
+            const finalBlocks = intersectingBlocks.filter(el => {
+                return !intersectingBlocks.some(otherEl => el !== otherEl && el.contains(otherEl));
             });
 
-            if (intersectingBlocks.size === 0 && parentElement && mergedRange.intersectsNode(parentElement)) {
-                const singleBlock = getContainingBlock(parentElement);
-                if (singleBlock) intersectingBlocks.add(singleBlock);
-            }
-
-            for (const block of intersectingBlocks) {
+            for (const block of finalBlocks) {
                 const blockRange = document.createRange();
                 blockRange.selectNodeContents(block);
-                
-                const start = mergedRange.compareBoundaryPoints(Range.START_TO_START, blockRange) > 0 ? mergedRange.startContainer : blockRange.startContainer;
-                const startOffset = mergedRange.compareBoundaryPoints(Range.START_TO_START, blockRange) > 0 ? mergedRange.startOffset : blockRange.startOffset;
-                const end = mergedRange.compareBoundaryPoints(Range.END_TO_END, blockRange) < 0 ? mergedRange.endContainer : blockRange.endContainer;
-                const endOffset = mergedRange.compareBoundaryPoints(Range.END_TO_END, blockRange) < 0 ? mergedRange.endOffset : blockRange.endOffset;
-                
-                const intersectionRange = document.createRange();
-                try {
-                    intersectionRange.setStart(start, startOffset);
-                    intersectionRange.setEnd(end, endOffset);
-                } catch (rangeError) {
-                    logger.warn("Error setting intersection range, skipping block.", rangeError);
-                    continue; // Skip this block if range is invalid
+
+                const intersectionRange = effectiveRange.cloneRange();
+                if (intersectionRange.compareBoundaryPoints(Range.START_TO_START, blockRange) < 0) {
+                    intersectionRange.setStart(blockRange.startContainer, blockRange.startOffset);
+                }
+                if (intersectionRange.compareBoundaryPoints(Range.END_TO_END, blockRange) > 0) {
+                    intersectionRange.setEnd(blockRange.endContainer, blockRange.endOffset);
                 }
 
                 if (!intersectionRange.collapsed) {
                     const highlightSpan = document.createElement('span');
                     highlightSpan.className = 'yummy-selection-highlight';
-                    highlightSpan.addEventListener('click', async () => await unhighlightElement(highlightSpan));
-
-                    const selectedContents = intersectionRange.extractContents();
-                    cleanFragment(selectedContents);
-                    highlightSpan.appendChild(selectedContents);
-                    intersectionRange.insertNode(highlightSpan);
+                    highlightSpan.addEventListener('click', () => unhighlightElement(highlightSpan));
+                    try {
+                        const contents = intersectionRange.extractContents();
+                        cleanFragment(contents);
+                        highlightSpan.appendChild(contents);
+                        intersectionRange.insertNode(highlightSpan);
+                    } catch (e) {
+                        logger.warn('Failed to wrap content for highlighting.', e);
+                    }
                 }
             }
+
+            finalBlocks.forEach(block => normalizeHighlights(block));
+
         } catch (e) {
-            logger.warn('无法包裹所选内容。这可能是由于复杂的页面结构造成的。', e);
+            logger.warn('Highlighting failed due to an unexpected error.', e);
         } finally {
             if (selection.rangeCount > 0) selection.removeAllRanges();
         }
 
-        // After highlighting, save the state of all affected blocks
-        document.querySelectorAll('.yummy-selection-highlight').forEach(async (highlight) => {
-            const parentBlock = getContainingBlock(highlight);
-            if(parentBlock) {
-                const elementId = getStableElementId(parentBlock);
-                if(elementId) {
-                    await saveData(elementId, { highlightHTML: parentBlock.innerHTML });
-                }
-            }
-        });
-
-        syncCollectionPanelWithDOM();
-    }
-
-    async function mergeWithExistingHighlights(newRange) {
-        const highlights = document.querySelectorAll('.yummy-selection-highlight');
-        for (const highlight of highlights) {
-            const highlightRange = document.createRange();
-            highlightRange.selectNodeContents(highlight);
-
-            if (newRange.intersectsNode(highlight)) {
-                if (newRange.compareBoundaryPoints(Range.START_TO_START, highlightRange) > 0) {
-                    newRange.setStart(highlightRange.startContainer, highlightRange.startOffset);
-                }
-                if (newRange.compareBoundaryPoints(Range.END_TO_END, highlightRange) < 0) {
-                    newRange.setEnd(highlightRange.endContainer, highlightRange.endOffset);
-                }
-                await unhighlightElement(highlight);
-            }
-        }
-        return newRange;
-    }
-
-    async function unhighlightElement(element) {
-        if (!element || !element.parentNode) return;
-        
-        const parentBlock = getContainingBlock(element);
-        const parent = element.parentNode;
-        
-        while (element.firstChild) {
-            parent.insertBefore(element.firstChild, element);
-        }
-        parent.removeChild(element);
-        parent.normalize();
-    
-        // After un-highlighting, save the new state of the parent block
-        if (parentBlock) {
-            const elementId = getStableElementId(parentBlock);
+        const allBlocksInContainer = assistantMessageContainer.querySelectorAll(CONTENT_ELEMENTS_SELECTOR);
+        for (const block of allBlocksInContainer) {
+            const elementId = getStableElementId(block);
             if (elementId) {
-                // If there are no more highlights in the block, remove the highlight data.
-                const remainingHighlights = parentBlock.querySelector('.yummy-selection-highlight');
-                await saveData(elementId, { highlightHTML: remainingHighlights ? parentBlock.innerHTML : null });
+                const hasHighlights = block.querySelector('.yummy-selection-highlight');
+                const oldState = currentConversationState[elementId] || {};
+                const newHTML = hasHighlights ? block.innerHTML : null;
+
+                if (oldState.highlightHTML !== newHTML) {
+                    await saveData(elementId, { highlightHTML: newHTML });
+                }
             }
         }
-        
-        logger.info('高亮已移除。');
+
         syncCollectionPanelWithDOM();
+    }
+
+    async function unhighlightElement(clickedElement) {
+        if (isUnHighlighting) return;
+        isUnHighlighting = true;
+    
+        try {
+            const blocksToUpdate = new Set();
+            const parentBlock = getContainingBlock(clickedElement);
+            if (parentBlock) blocksToUpdate.add(parentBlock);
+    
+            const parent = clickedElement.parentNode;
+            if (parent) {
+                while (clickedElement.firstChild) {
+                    parent.insertBefore(clickedElement.firstChild, clickedElement);
+                }
+                parent.removeChild(clickedElement);
+            }
+    
+            // After removing, re-normalize the affected block to merge any now-adjacent highlights
+            if (parentBlock) {
+                 normalizeHighlights(parentBlock);
+            }
+    
+            const savePromises = Array.from(blocksToUpdate).map(async (block) => {
+                block.normalize();
+                const elementId = getStableElementId(block);
+                if (elementId) {
+                    const remainingHighlights = block.querySelector('.yummy-selection-highlight');
+                    await saveData(elementId, { highlightHTML: remainingHighlights ? block.innerHTML : null });
+                }
+            });
+    
+            await Promise.all(savePromises);
+            
+            logger.info('高亮已移除。');
+            syncCollectionPanelWithDOM();
+        } catch (error) {
+            logger.error('Failed during unhighlighting:', error);
+        } finally {
+            setTimeout(() => { isUnHighlighting = false; }, 100); // Increased delay for safety
+        }
     }
 
     function handleTextSelection(event) {
-        if (isSelectionModeActive) {
-            highlightSelection();
-            return;
-        }
-
-        const selection = window.getSelection();
-        if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-            if (quickHighlightButton) quickHighlightButton.style.display = 'none';
-            return;
-        }
-
-        const range = selection.getRangeAt(0);
-        const parentElement = range.commonAncestorContainer.parentElement;
-        
-        // 核心逻辑修改：确保选中的内容必须位于AI助手的回复内，才显示高亮按钮。
-        const isInsideAssistantMessage = parentElement.closest('[data-message-author-role="assistant"]');
-        const isInsideYummyUI = parentElement.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-collection-panel, #yummy-quick-highlight-button');
-
-        if (!isInsideAssistantMessage || isInsideYummyUI) {
-            if (quickHighlightButton) quickHighlightButton.style.display = 'none';
-            return;
-        }
-
-        lastSelectionRange = range.cloneRange();
-        quickHighlightButton.style.display = 'flex';
-        quickHighlightButton.style.left = `${event.clientX + 5}px`;
-        quickHighlightButton.style.top = `${event.clientY + 5}px`;
+        // Debounce mouseup to handle messy selection state from GPT's UI
+        setTimeout(() => {
+            if (isUnHighlighting) return;
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+                if (quickHighlightButton) quickHighlightButton.style.display = 'none';
+                return;
+            }
+    
+            if (isSelectionModeActive) {
+                highlightSelection();
+                return;
+            }
+    
+            const range = selection.getRangeAt(0);
+            const parentElement = range.commonAncestorContainer.parentElement;
+            
+            const isInsideAssistantMessage = parentElement.closest('[data-message-author-role="assistant"]');
+            const isInsideYummyUI = parentElement.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-collection-panel, #yummy-quick-highlight-button');
+    
+            if (!isInsideAssistantMessage || isInsideYummyUI) {
+                if (quickHighlightButton) quickHighlightButton.style.display = 'none';
+                return;
+            }
+    
+            lastSelectionRange = range.cloneRange();
+            quickHighlightButton.style.display = 'flex';
+            
+            const rect = range.getBoundingClientRect();
+            quickHighlightButton.style.left = `${event.clientX + 5}px`;
+            quickHighlightButton.style.top = `${event.clientY + 5}px`;
+        }, 50); 
     }
 
     function closeActiveContextMenu() {
