@@ -394,7 +394,7 @@ body.yummy-selection-mode-active {
 
 /* 1. 通用外观样式 */
 #yummy-copy-toast {
-    position: fixed; /* 改为 fixed 定位，使其相对于视口，而不是任何父容器 */
+    position: absolute; /* 改为 absolute，相对于收集面板定位 */
     display: flex;
     align-items: center;
     gap: 8px;
@@ -414,12 +414,12 @@ body.yummy-selection-mode-active {
 }
 
 /* 2. "屏幕居中" 模式 (替换旧的 "面板内固定" 模式) */
-#yummy-copy-toast.yummy-toast-center-mode {
+#yummy-copy-toast.yummy-toast-panel-mode {
     top: 50px; /* 从顶部 50px 的位置出现 */
     left: 50%;
     transform: translate(-50%, -20px); /* 初始位置在上方，为滑入动画做准备 */
 }
-#yummy-copy-toast.yummy-toast-center-mode.visible {
+#yummy-copy-toast.yummy-toast-panel-mode.visible {
     visibility: visible;
     opacity: 1;
     transform: translate(-50%, 0); /* 滑入到最终位置 */
@@ -436,6 +436,24 @@ body.yummy-selection-mode-active {
     transform: translate(10px, 10px); /* 微调动画效果 */
 }
 
+/* 4. 新增: "固定于脚部之上" 模式 */
+#yummy-copy-toast.yummy-toast-footer-mode {
+    /* 关键: 定位在收集面板内部，并水平居中 */
+    left: 50%;
+    bottom: 75px; /* 向上偏移，位于脚部之上 */
+    transform: translate(-50%, 20px); /* 水平居中并为滑入动画做准备 */
+    /* 确保 toast 在 collectionPanel 内部 */
+    right: auto; 
+}
+#yummy-collection-panel #yummy-copy-toast.yummy-toast-footer-mode {
+    position: absolute;
+}
+
+#yummy-copy-toast.yummy-toast-footer-mode.visible {
+    visibility: visible;
+    opacity: 1;
+    transform: translate(-50%, 0); /* 滑入到最终位置 */
+}
 
 /* 通用: Toast 内的“成功”对勾图标 */
 #yummy-copy-toast::before {
@@ -623,6 +641,7 @@ body.yummy-selection-mode-active {
 /* v0.5.14: 右侧文本内容区域 */
 .yummy-item-text-content {
     padding: 10px 12px;
+    flex-grow: 1; /* 新增: 让此元素填满剩余空间 */
     cursor: pointer;
     /* vNext: 使用 max-height 和渐变蒙版来替代 line-clamp */
     max-height: 90px; /* 约等于4行文字的高度 (14px * 1.6 * 4) */
@@ -942,11 +961,13 @@ body.yummy-selection-mode-active {
     width: 90%;
     max-width: 400px;
     transform: scale(0.95);
-    transition: transform 0.2s ease;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+    opacity: 0; /* 为淡入效果新增 */
 }
 
 .yummy-global-alert-overlay.visible .yummy-global-alert-box {
     transform: scale(1);
+    opacity: 1; /* 为淡入效果新增 */
 }
 
 .yummy-global-alert-title {
@@ -973,7 +994,9 @@ body.yummy-selection-mode-active {
 
 .yummy-global-alert-footer {
     margin-top: 24px;
-    text-align: right;
+    display: flex; /* 使用 Flexbox 布局 */
+    justify-content: flex-end; /* 按钮靠右对齐 */
+    gap: 12px; /* 设置按钮之间的间距 */
 }
 
 .yummy-global-alert-button {
@@ -1054,19 +1077,37 @@ body.yummy-selection-mode-active {
 }
 
 #yummy-collection-mode-toggle {
+    /* vNext: 全新的开关样式 */
     position: absolute;
     right: 12px;
     top: 50%;
     transform: translateY(-50%);
-    font-size: 18px;
+    width: 44px;
+    height: 24px;
+    background-color: #e5e7eb; /* 关闭状态的背景色 */
+    border-radius: 12px;
     cursor: pointer;
-    color: #6b7280;
-    padding: 4px;
-    border-radius: 4px;
-    transition: all 0.2s;
+    transition: background-color 0.2s ease-in-out;
+    -webkit-tap-highlight-color: transparent; /* 移除移动端的点击高光 */
 }
 
-#yummy-collection-mode-toggle:hover {
-    background-color: #e5e7eb;
-    color: #111827;
+#yummy-collection-mode-toggle::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background-color: white;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s ease-in-out;
+}
+
+#yummy-collection-mode-toggle.markdown-mode {
+    background-color: #3b82f6; /* 开启状态的背景色 */
+}
+
+#yummy-collection-mode-toggle.markdown-mode::before {
+    transform: translateX(20px);
 }

@@ -579,19 +579,23 @@
 
 
     let toastTimer = null;
-    function showToast(message, event = null) {
+    function showToast(message, event = null, anchorToFooter = false) {
         if (!copyToast) return;
 
         if (toastTimer) {
             clearTimeout(toastTimer);
         }
 
-        copyToast.classList.remove('yummy-toast-panel-mode', 'yummy-toast-cursor-mode', 'visible');
+        copyToast.classList.remove('yummy-toast-panel-mode', 'yummy-toast-cursor-mode', 'yummy-toast-footer-mode', 'visible');
         void copyToast.offsetWidth;
 
         copyToast.firstElementChild.textContent = message;
 
-        if (event) {
+        if (anchorToFooter) {
+            copyToast.classList.add('yummy-toast-footer-mode');
+            copyToast.style.left = '';
+            copyToast.style.top = '';
+        } else if (event) {
             copyToast.classList.add('yummy-toast-cursor-mode');
             const toastWidth = copyToast.offsetWidth;
             let left = event.clientX + 10;
@@ -934,9 +938,12 @@
             updateCategoryCheckboxStates();
         });
         
-        textContentDiv.addEventListener('click', (event) => {
-            event.stopPropagation();
-            const textToCopy = textContentDiv.textContent || '';
+        item.addEventListener('click', (event) => {
+            // 确保点击的不是状态栏
+            if (event.target.closest('.yummy-item-status-bar')) {
+                return;
+            }
+            const textToCopy = isMarkdownMode ? textContentDiv.dataset.markdownText : textContentDiv.dataset.plainText;
             navigator.clipboard.writeText(textToCopy).then(() => {
                 showToast('已复制!', event);
                 item.classList.add('copied-flash');
@@ -1255,13 +1262,14 @@
             collectionPinBtn.title = isCollectionPanelPinned ? '取消钉住' : '钉住面板';
         });
 
-        collectionHeader.addEventListener('click', (e) => {
-            if (collectionPinBtn.contains(e.target)) return;
-             collectionPinBtn.click();
-        });
-
         // Clear All Markings Easter Egg
-        collectionHeader.addEventListener('dblclick', promptToClearAllMarkings);
+        collectionHeader.addEventListener('dblclick', (e) => {
+            // 确保双击的不是功能性按钮
+            const isFunctionalButton = e.target.closest('#yummy-collection-pin-btn, #yummy-collection-mode-toggle');
+            if (!isFunctionalButton) {
+                promptToClearAllMarkings();
+            }
+        });
         
         collectionPanel.addEventListener('mouseenter', () => {
             if (collectionHideTimer) {
@@ -1281,7 +1289,7 @@
         copySelectedBtn.addEventListener('click', (e) => {
             const selectedItems = collectionContent.querySelectorAll('.yummy-collection-item.selected:not(.yummy-collection-item-temp-egg)');
             if (selectedItems.length === 0) {
-                showToast('没有选中的内容');
+                showToast('没有选中的内容', null, true);
 
                 // Empty Collection Copy Easter Egg Logic
                 clearTimeout(emptyCopyClickTimer);
@@ -1304,10 +1312,10 @@
                 .join('\n\n---\n\n');
 
             navigator.clipboard.writeText(allText).then(() => {
-                 showToast(`已复制 ${selectedItems.length} 个条目`);
+                 showToast(`已复制 ${selectedItems.length} 个条目`, null, true);
             }).catch(err => {
                 logger.error('复制选中内容失败', err);
-                showToast('复制失败');
+                showToast('复制失败', null, true);
             });
         });
 
@@ -1332,7 +1340,7 @@
         copyToast.id = 'yummy-copy-toast';
         const toastText = document.createElement('span');
         copyToast.appendChild(toastText);
-        document.body.appendChild(copyToast);
+        collectionPanel.appendChild(copyToast); // 移动到 collectionPanel 内部
 
         collectionPanel.addEventListener('transitionstart', (event) => {
             if (event.propertyName === 'right') {
@@ -1352,30 +1360,11 @@
         // Symmetric to pin button, on the right
         const collectionModeToggle = document.createElement('span');
         collectionModeToggle.id = 'yummy-collection-mode-toggle';
-        collectionModeToggle.textContent = '📄'; // Icon for plain text
         collectionModeToggle.title = '切换显示模式: 纯文本 / Markdown';
-        collectionModeToggle.style.position = 'absolute';
-        collectionModeToggle.style.right = '12px';
-        collectionModeToggle.style.top = '50%';
-        collectionModeToggle.style.transform = 'translateY(-50%)';
-        collectionModeToggle.style.fontSize = '18px';
-        collectionModeToggle.style.cursor = 'pointer';
-        collectionModeToggle.style.color = '#6b7280';
-        collectionModeToggle.style.padding = '4px';
-        collectionModeToggle.style.borderRadius = '4px';
-        collectionModeToggle.addEventListener('mouseover', () => {
-            collectionModeToggle.style.backgroundColor = '#e5e7eb';
-            collectionModeToggle.style.color = '#111827';
-        });
-        collectionModeToggle.addEventListener('mouseout', () => {
-            collectionModeToggle.style.backgroundColor = 'transparent';
-            collectionModeToggle.style.color = '#6b7280';
-        });
         
         collectionModeToggle.addEventListener('click', () => {
             isMarkdownMode = !isMarkdownMode;
-            collectionModeToggle.textContent = isMarkdownMode ? '🗒️' : '📄';
-            collectionModeToggle.title = `切换显示模式: ${isMarkdownMode ? 'Markdown' : '纯文本'}`;
+            collectionModeToggle.classList.toggle('markdown-mode', isMarkdownMode);
             
             // 遍历所有已有的收集项，切换它们的显示内容
             const allItems = collectionContent.querySelectorAll('.yummy-collection-item');
