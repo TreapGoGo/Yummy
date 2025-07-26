@@ -1052,3 +1052,21 @@ body.yummy-selection-mode-active {
     transition: all 0.5s ease-in-out;
     max-height: 100px; /* Initial max-height for transition */
 }
+
+#yummy-collection-mode-toggle {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 18px;
+    cursor: pointer;
+    color: #6b7280;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+#yummy-collection-mode-toggle:hover {
+    background-color: #e5e7eb;
+    color: #111827;
+}

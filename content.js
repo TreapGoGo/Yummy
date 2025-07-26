@@ -357,6 +357,8 @@
     let previewTooltip = null;
     let isPanelAnimating = false;
     let collectionItemStates = new Map();
+    let isMarkdownMode = false; // 新增状态，控制面板显示模式
+    let turndownService; // 用于转换 HTML 到 Markdown
 
     // --- Easter Egg State ---
     const likeClickTracker = new Map();
@@ -530,7 +532,7 @@
         let fullText;
 
         if (isCustom) {
-            // 修复BUG：在末尾添加一个“零宽度空格”，以强制浏览器正确渲染两个换行符，并为光标提供可靠的定位锚点。
+            // 修复BUG：在末尾添加一个"零宽度空格"，以强制浏览器正确渲染两个换行符，并为光标提供可靠的定位锚点。
             fullText = `${baseContent}\n\n\u200B`;
         } else {
             // 预设指令的情况保持不变。
@@ -915,7 +917,11 @@
 
         const textContentDiv = document.createElement('div');
         textContentDiv.className = 'yummy-item-text-content';
-        textContentDiv.textContent = text;
+        const plainText = text;
+        const markdownText = turndownService.turndown(itemData.element.innerHTML);
+        textContentDiv.dataset.plainText = plainText;
+        textContentDiv.dataset.markdownText = markdownText;
+        textContentDiv.textContent = isMarkdownMode ? markdownText : plainText;
         
         item.appendChild(statusBar);
         item.appendChild(textContentDiv);
@@ -1291,7 +1297,10 @@
             }
 
             const allText = Array.from(selectedItems)
-                .map(item => item.querySelector('.yummy-item-text-content').textContent)
+                .map(item => {
+                    const textDiv = item.querySelector('.yummy-item-text-content');
+                    return isMarkdownMode ? textDiv.dataset.markdownText : textDiv.dataset.plainText;
+                })
                 .join('\n\n---\n\n');
 
             navigator.clipboard.writeText(allText).then(() => {
@@ -1339,6 +1348,45 @@
         previewTooltip = document.createElement('div');
         previewTooltip.id = 'yummy-preview-tooltip';
         document.body.appendChild(previewTooltip);
+
+        // Symmetric to pin button, on the right
+        const collectionModeToggle = document.createElement('span');
+        collectionModeToggle.id = 'yummy-collection-mode-toggle';
+        collectionModeToggle.textContent = '📄'; // Icon for plain text
+        collectionModeToggle.title = '切换显示模式: 纯文本 / Markdown';
+        collectionModeToggle.style.position = 'absolute';
+        collectionModeToggle.style.right = '12px';
+        collectionModeToggle.style.top = '50%';
+        collectionModeToggle.style.transform = 'translateY(-50%)';
+        collectionModeToggle.style.fontSize = '18px';
+        collectionModeToggle.style.cursor = 'pointer';
+        collectionModeToggle.style.color = '#6b7280';
+        collectionModeToggle.style.padding = '4px';
+        collectionModeToggle.style.borderRadius = '4px';
+        collectionModeToggle.addEventListener('mouseover', () => {
+            collectionModeToggle.style.backgroundColor = '#e5e7eb';
+            collectionModeToggle.style.color = '#111827';
+        });
+        collectionModeToggle.addEventListener('mouseout', () => {
+            collectionModeToggle.style.backgroundColor = 'transparent';
+            collectionModeToggle.style.color = '#6b7280';
+        });
+        
+        collectionModeToggle.addEventListener('click', () => {
+            isMarkdownMode = !isMarkdownMode;
+            collectionModeToggle.textContent = isMarkdownMode ? '🗒️' : '📄';
+            collectionModeToggle.title = `切换显示模式: ${isMarkdownMode ? 'Markdown' : '纯文本'}`;
+            
+            // 遍历所有已有的收集项，切换它们的显示内容
+            const allItems = collectionContent.querySelectorAll('.yummy-collection-item');
+            allItems.forEach(item => {
+                const textDiv = item.querySelector('.yummy-item-text-content');
+                if (textDiv) {
+                    textDiv.textContent = isMarkdownMode ? textDiv.dataset.markdownText : textDiv.dataset.plainText;
+                }
+            });
+        });
+        collectionHeader.appendChild(collectionModeToggle);
     }
 
     function createGlobalAlert() {
@@ -1556,7 +1604,7 @@
             case 'Backspace':
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                // 切换到“自定义指令”模式，这会清除输入框中的预设指令
+                // 切换到"自定义指令"模式，这会清除输入框中的预设指令
                 updateInstructionSelection(INSTRUCTIONS.length);
                 // 延迟关闭菜单，为用户提供视觉反馈
                 setTimeout(() => {
@@ -1734,6 +1782,12 @@
 
     function initializeFeatures() {
         try {
+            // Initialize Turndown service
+            turndownService = new TurndownService({ 
+                headingStyle: 'atx', 
+                codeBlockStyle: 'fenced' 
+            });
+
             // Initialize the logger's UI first, so it's ready for any subsequent logs.
             if (window.logger && typeof window.logger.init === 'function') {
                 window.logger.init();
