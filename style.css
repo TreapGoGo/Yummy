@@ -991,3 +991,64 @@ body.yummy-selection-mode-active {
 .yummy-global-alert-button:hover {
     background-color: #2563eb;
 }
+
+.yummy-global-alert-button.yummy-alert-btn-secondary {
+    background-color: #e5e7eb;
+    color: #374151;
+}
+.yummy-global-alert-button.yummy-alert-btn-secondary:hover {
+    background-color: #d1d5db;
+}
+
+.yummy-global-alert-button.yummy-alert-btn-danger {
+    background-color: #ef4444;
+    color: white;
+}
+.yummy-global-alert-button.yummy-alert-btn-danger:hover {
+    background-color: #dc2626;
+}
+
+
+/* --- Easter Eggs --- */
+
+/* Sugar Rush: Container for candies */
+.yummy-sugar-rush-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 10010;
+    overflow: hidden;
+}
+
+/* Sugar Rush: Individual candy emoji */
+.yummy-candy-emoji {
+    position: absolute;
+    bottom: -50px; /* Start from below the screen */
+    font-size: 24px;
+    animation-name: yummy-sugar-float;
+    animation-timing-function: linear;
+    animation-iteration-count: 1;
+    will-change: transform, opacity;
+}
+
+@keyframes yummy-sugar-float {
+    from {
+        transform: translateY(0) translateX(0) rotate(0deg);
+        opacity: 1;
+    }
+    to {
+        transform: translateY(-110vh) translateX(var(--x-drift, 0)) rotate(720deg);
+        opacity: 0;
+    }
+}
+
+/* Empty Copy Lyric: Temporary item */
+.yummy-collection-item-temp-egg {
+    background-color: #fefce8; /* A very light yellow */
+    border-color: #facc15;
+    transition: all 0.5s ease-in-out;
+    max-height: 100px; /* Initial max-height for transition */
+}

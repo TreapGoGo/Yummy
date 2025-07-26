@@ -154,6 +154,23 @@
         likeButton.title = '想吃 (Like)';
         likeButton.addEventListener('click', async (e) => {
             e.stopPropagation();
+
+            // Sugar Rush Easter Egg Logic
+            const now = Date.now();
+            const tracker = likeClickTracker.get(element) || { count: 0, lastClickTime: 0 };
+            if (now - tracker.lastClickTime < 3000) {
+                tracker.count++;
+            } else {
+                tracker.count = 1;
+            }
+            tracker.lastClickTime = now;
+            likeClickTracker.set(element, tracker);
+
+            if (tracker.count >= 7) {
+                triggerSugarRush();
+                likeClickTracker.delete(element); // Reset after triggering
+            }
+
             const isParent = /H[1-6]/.test(element.tagName);
             if (isParent) {
                 await handleParentRating(element, 'liked');
@@ -186,26 +203,32 @@
     const CONTENT_ELEMENTS_SELECTOR = `[data-message-author-role="assistant"] h1, [data-message-author-role="assistant"] h2, [data-message-author-role="assistant"] h3, [data-message-author-role="assistant"] h4, [data-message-author-role="assistant"] h5, [data-message-author-role="assistant"] h6, [data-message-author-role="assistant"] p, [data-message-author-role="assistant"] pre, [data-message-author-role="assistant"] li, [data-message-author-role="assistant"] table`;
 
     async function processNewElements() {
-        const elements = document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR);
-        for (const element of elements) {
+        const elementsToProcess = document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR);
+    
+        for (const element of elementsToProcess) {
+            const elementId = getStableElementId(element);
+    
+            // Always try to restore state first from the central state object.
+            if (elementId && currentConversationState[elementId]) {
+                const savedData = currentConversationState[elementId];
+    
+                // BUGFIX: More robust check. Only restore highlight if it's in storage 
+                // AND not already present in the DOM for this element. This prevents
+                // re-running the destructive innerHTML operation on subsequent updates.
+                if (savedData.highlightHTML && !element.querySelector('.yummy-selection-highlight')) {
+                    restoreHighlight(element, savedData.highlightHTML);
+                }
+    
+                element.classList.remove('yummy-liked', 'yummy-disliked');
+                if (savedData.rating === 'liked') {
+                    element.classList.add('yummy-liked');
+                } else if (savedData.rating === 'disliked') {
+                    element.classList.add('yummy-disliked');
+                }
+            }
+    
             if (!element.dataset.yummyProcessed) {
                 addRatingBar(element);
-                // After adding the bar, check if saved state needs to be applied
-                const elementId = getStableElementId(element);
-                if (elementId && currentConversationState[elementId]) {
-                    const savedData = currentConversationState[elementId];
-                    if (savedData.rating) {
-                        await applyHierarchicalState(element, savedData.rating);
-                    }
-                    if (savedData.highlight) {
-                        // Use innerHTML to restore highlights
-                        element.innerHTML = savedData.highlight;
-                        // Re-attach event listeners to restored highlights
-                        element.querySelectorAll('.yummy-selection-highlight').forEach(span => {
-                           span.addEventListener('click', async () => await unhighlightElement(span));
-                        });
-                    }
-                }
             }
         }
         syncCollectionPanelWithDOM();
@@ -215,63 +238,95 @@
 
     function getSubsequentSiblings(startElement) {
         const results = [];
-        if (!startElement) {
-            return results;
-        }
-        let nextElement = startElement.nextElementSibling;
+        if (!startElement) return results;
+    
+        const container = startElement.closest('.yummy-paragraph-container');
+        if (!container) return results;
+    
+        let nextSibling = container.nextElementSibling;
         const startTag = startElement.tagName;
         const startLevel = parseInt(startTag.substring(1), 10);
-
-        while (nextElement) {
-            const nextTag = nextElement.tagName;
-            if (nextTag.match(/^H[1-6]$/)) {
-                const nextLevel = parseInt(nextTag.substring(1), 10);
-                if (nextLevel <= startLevel) {
-                    break;
-                }
+    
+        while (nextSibling) {
+            const elementsInSibling = [];
+            
+            // Check if the sibling itself is a processable element
+            if (nextSibling.matches(CONTENT_ELEMENTS_SELECTOR)) {
+                elementsInSibling.push(nextSibling);
             }
-            results.push(nextElement);
-            nextElement = nextElement.nextElementSibling;
+            // And also find all processable descendants within it.
+            // This is key to finding all <li>s inside a <ul>.
+            elementsInSibling.push(...Array.from(nextSibling.querySelectorAll(CONTENT_ELEMENTS_SELECTOR)));
+    
+            // Remove duplicates that might arise from the above two steps
+            const uniqueElements = [...new Set(elementsInSibling)];
+    
+            if (uniqueElements.length > 0) {
+                const firstContentEl = uniqueElements[0];
+    
+                // Check if the first element marks a new section, which should stop us.
+                if (firstContentEl.tagName.match(/^H[1-6]$/)) {
+                    const nextLevel = parseInt(firstContentEl.tagName.substring(1), 10);
+                    if (nextLevel <= startLevel) {
+                        break; // Stop before this new section.
+                    }
+                }
+                results.push(...uniqueElements);
+            }
+    
+            nextSibling = nextSibling.nextElementSibling;
         }
         return results;
     }
 
     async function handleParentRating(parentElement, newRating) {
-        const state = parentClickState.get(parentElement) || {
-            rating: 'none',
-            level: 0
-        };
+        const state = parentClickState.get(parentElement) || { rating: 'none', level: 0 };
         const children = getSubsequentSiblings(parentElement);
+        let changedElements = new Map(); // Collect elements and their new state
+
+        const applyState = async (el, ratingState) => {
+            el.classList.remove('yummy-liked', 'yummy-disliked');
+            if (ratingState === 'liked') el.classList.add('yummy-liked');
+            else if (ratingState === 'disliked') el.classList.add('yummy-disliked');
+            const elId = getStableElementId(el);
+            if (elId) changedElements.set(elId, { rating: ratingState === 'none' ? null : ratingState });
+        };
 
         if (newRating === state.rating) {
-            if (state.level === 1) {
+            if (state.level === 1) { // Second click -> rate all children
                 state.level = 2;
-                for (const child of children) { await applyHierarchicalState(child, newRating); }
+                for (const child of children) { await applyState(child, newRating); }
                 logger.debug(`块状评价 (二次点击): ${newRating}`, parentElement);
-            } else {
+            } else { // Third click -> un-rate all
                 state.rating = 'none';
                 state.level = 0;
-                await applyHierarchicalState(parentElement, 'none');
-                for (const child of children) { await applyHierarchicalState(child, 'none'); }
+                await applyState(parentElement, 'none');
+                for (const child of children) { await applyState(child, 'none'); }
                 logger.debug(`块状评价 (取消): none`, parentElement);
             }
         } else {
-            if (state.level === 2) {
+            if (state.level === 2) { // Was level 2, now flipping color
                 state.rating = newRating;
-                await applyHierarchicalState(parentElement, newRating);
-                for (const child of children) { await applyHierarchicalState(child, newRating); }
+                await applyState(parentElement, newRating);
+                for (const child of children) { await applyState(child, newRating); }
                 logger.debug(`块状评价 (翻转): ${newRating}`, parentElement);
-            } else {
+            } else { // First click, or was level 1 and flipping
                 state.rating = newRating;
                 state.level = 1;
-                await applyHierarchicalState(parentElement, 'none');
-                for (const child of children) { await applyHierarchicalState(child, 'none'); }
-                await applyHierarchicalState(parentElement, newRating);
+                await applyState(parentElement, 'none'); // Clear visual state first
+                for (const child of children) { await applyState(child, 'none'); }
+                await applyState(parentElement, newRating); // Then apply new state to parent only
                 children.forEach(child => flashElement(child));
                 logger.debug(`块状评价 (首次点击): ${newRating}`, parentElement);
             }
         }
         parentClickState.set(parentElement, state);
+
+        // Batch save all changes at the end
+        for (const [id, data] of changedElements.entries()) {
+            await saveData(id, data);
+        }
+        syncCollectionPanelWithDOM();
     }
 
     let debounceTimer = null;
@@ -302,6 +357,11 @@
     let previewTooltip = null;
     let isPanelAnimating = false;
     let collectionItemStates = new Map();
+
+    // --- Easter Egg State ---
+    const likeClickTracker = new Map();
+    let emptyCopyClickCount = 0;
+    let emptyCopyClickTimer = null;
 
     let globalAlert = null;
     // vNext: 指令菜单所需的状态变量
@@ -657,7 +717,7 @@
             if(parentBlock) {
                 const elementId = getStableElementId(parentBlock);
                 if(elementId) {
-                    await saveData(elementId, { highlight: parentBlock.innerHTML });
+                    await saveData(elementId, { highlightHTML: parentBlock.innerHTML });
                 }
             }
         });
@@ -702,7 +762,7 @@
             if (elementId) {
                 // If there are no more highlights in the block, remove the highlight data.
                 const remainingHighlights = parentBlock.querySelector('.yummy-selection-highlight');
-                await saveData(elementId, { highlight: remainingHighlights ? parentBlock.innerHTML : null });
+                await saveData(elementId, { highlightHTML: remainingHighlights ? parentBlock.innerHTML : null });
             }
         }
         
@@ -749,6 +809,9 @@
 
     syncCollectionPanelWithDOM = function() {
         if (!collectionContent) return;
+
+        // BUGFIX: Preserve the temporary easter egg item if it exists.
+        const eggElement = collectionContent.querySelector('.yummy-collection-item-temp-egg');
 
         let collectedItems = [];
         const processedElements = new Set();
@@ -816,6 +879,11 @@
         }
         
         collectionContent.innerHTML = '';
+
+        // If the egg element was found, put it back at the top.
+        if (eggElement) {
+            collectionContent.prepend(eggElement);
+        }
 
         if (collectedItems.length > 0) {
             collectedItems.forEach(item => {
@@ -1160,6 +1228,8 @@
 
         document.body.appendChild(collectionPanel);
 
+        // --- Event Listeners for UI Elements ---
+
         selectionModeButton.addEventListener('click', () => {
             isSelectionModeActive = !isSelectionModeActive;
             selectionModeButton.classList.toggle('active', isSelectionModeActive);
@@ -1183,6 +1253,9 @@
             if (collectionPinBtn.contains(e.target)) return;
              collectionPinBtn.click();
         });
+
+        // Clear All Markings Easter Egg
+        collectionHeader.addEventListener('dblclick', promptToClearAllMarkings);
         
         collectionPanel.addEventListener('mouseenter', () => {
             if (collectionHideTimer) {
@@ -1200,9 +1273,20 @@
         });
 
         copySelectedBtn.addEventListener('click', (e) => {
-            const selectedItems = collectionContent.querySelectorAll('.yummy-collection-item.selected');
+            const selectedItems = collectionContent.querySelectorAll('.yummy-collection-item.selected:not(.yummy-collection-item-temp-egg)');
             if (selectedItems.length === 0) {
                 showToast('没有选中的内容');
+
+                // Empty Collection Copy Easter Egg Logic
+                clearTimeout(emptyCopyClickTimer);
+                emptyCopyClickCount++;
+                emptyCopyClickTimer = setTimeout(() => { emptyCopyClickCount = 0; }, 2000); // Reset after 2 seconds
+
+                if (emptyCopyClickCount >= 5) {
+                    triggerEmptyCopyEgg();
+                    emptyCopyClickCount = 0;
+                    clearTimeout(emptyCopyClickTimer);
+                }
                 return;
             }
 
@@ -1266,22 +1350,22 @@
                 <h3 class="yummy-global-alert-title"></h3>
                 <p class="yummy-global-alert-message"></p>
                 <p class="yummy-global-alert-details"></p>
-                <div class="yummy-global-alert-footer">
-                    <button class="yummy-global-alert-button">明白啦！</button>
-                </div>
+                <div class="yummy-global-alert-footer"></div>
             </div>
         `;
         document.body.appendChild(globalAlert);
 
-        globalAlert.querySelector('.yummy-global-alert-button').addEventListener('click', hideGlobalAlert);
         globalAlert.addEventListener('click', (e) => {
-            if (e.target === globalAlert) {
+            // For simple alerts with default button, clicking overlay also hides it.
+            // For alerts with multiple buttons, this should not happen.
+            const footer = globalAlert.querySelector('.yummy-global-alert-footer');
+            if (e.target === globalAlert && footer.childElementCount <= 1) {
                 hideGlobalAlert();
             }
         });
     }
 
-    function showGlobalAlert({ title, message, details = '' }) {
+    function showGlobalAlert({ title, message, details = '', buttons = [] }) {
         if (!globalAlert) createGlobalAlert();
         globalAlert.querySelector('.yummy-global-alert-title').textContent = title;
         globalAlert.querySelector('.yummy-global-alert-message').textContent = message;
@@ -1289,6 +1373,29 @@
         const detailsEl = globalAlert.querySelector('.yummy-global-alert-details');
         detailsEl.textContent = details;
         detailsEl.style.display = details ? 'block' : 'none';
+
+        const footer = globalAlert.querySelector('.yummy-global-alert-footer');
+        footer.innerHTML = ''; // Clear previous buttons
+
+        if (buttons.length === 0) {
+            // Default button for simple alerts
+            buttons.push({ text: '明白啦！', class: 'yummy-alert-btn-primary', onClick: hideGlobalAlert });
+        }
+
+        buttons.forEach(btnData => {
+            const button = document.createElement('button');
+            button.textContent = btnData.text;
+            button.className = 'yummy-global-alert-button';
+            if (btnData.class) {
+                button.classList.add(btnData.class);
+            }
+            button.addEventListener('click', () => {
+                // The button's own action might hide the alert.
+                // It's safer to let the onClick handler do it.
+                btnData.onClick();
+            });
+            footer.appendChild(button);
+        });
 
         globalAlert.classList.add('visible');
     }
@@ -1471,6 +1578,157 @@
         if (newIndex !== currentInstructionIndex) {
             updateInstructionSelection(newIndex);
         }
+    }
+
+    // --- Easter Egg Functions ---
+
+    function triggerSugarRush() {
+        const candies = ['🍬', '🍭', '🍰', '🍩', '🍪', '🍫', '🍦'];
+        const container = document.createElement('div');
+        container.className = 'yummy-sugar-rush-container';
+        document.body.appendChild(container);
+    
+        for (let i = 0; i < 30; i++) { // Spawn 30 candies
+            setTimeout(() => {
+                const candy = document.createElement('span');
+                candy.className = 'yummy-candy-emoji';
+                candy.textContent = candies[Math.floor(Math.random() * candies.length)];
+                candy.style.left = `${Math.random() * 100}vw`;
+                candy.style.animationDuration = `${Math.random() * 2 + 3}s`; // 3-5s duration
+                container.appendChild(candy);
+            }, i * 50); // Stagger the creation for a nicer effect
+        }
+    
+        setTimeout(() => {
+            container.remove();
+        }, 5000); // Remove the container after all animations are well and truly over
+    }
+
+    async function clearAllMarkings() {
+        if (!currentConversationId) return;
+        const storageKey = `${STORAGE_KEY_PREFIX}${currentConversationId}`;
+        try {
+            // 1. Clear from storage
+            await chrome.storage.local.remove(storageKey);
+            
+            // 2. Clear in-memory state
+            currentConversationState = {};
+            
+            // 3. Clear all visual markings from the DOM without causing side-effects
+            document.querySelectorAll('.yummy-liked, .yummy-disliked').forEach(el => {
+                el.classList.remove('yummy-liked', 'yummy-disliked');
+            });
+
+            const highlights = document.querySelectorAll('.yummy-selection-highlight');
+            highlights.forEach(el => {
+                const parent = el.parentNode;
+                if (parent) {
+                    while (el.firstChild) {
+                        parent.insertBefore(el.firstChild, el);
+                    }
+                    parent.removeChild(el);
+                    parent.normalize();
+                }
+            });
+            
+            // 4. Update the UI panels
+            syncCollectionPanelWithDOM();
+            hideGlobalAlert();
+            
+            logger.info(`All markings for conversation ${currentConversationId} have been cleared.`);
+        } catch (error) {
+            logger.error('Failed to clear all markings:', error);
+        }
+    }
+
+    function promptToClearAllMarkings() {
+        if (!currentConversationId) {
+            showGlobalAlert({ title: '提示', message: '当前没有在一个有效的会话中。'});
+            return;
+        }
+        
+        showGlobalAlert({
+            title: '清除确认',
+            message: '您确定要清除本会话的所有标记吗？',
+            details: '此操作不可恢复！',
+            buttons: [
+                {
+                    text: '残忍清除',
+                    class: 'yummy-alert-btn-danger',
+                    onClick: async () => {
+                        await clearAllMarkings();
+                    }
+                },
+                {
+                    text: '我再想想',
+                    class: 'yummy-alert-btn-secondary',
+                    onClick: hideGlobalAlert
+                }
+            ]
+        });
+    }
+
+    function triggerEmptyCopyEgg() {
+        if (!collectionContent || collectionContent.querySelector('.yummy-collection-item-temp-egg')) {
+            return; // Don't add if one is already present
+        }
+    
+        const lyric = '城市的花园没有花，广播里的声音嘶哑……';
+        const item = document.createElement('div');
+        item.className = 'yummy-collection-item yummy-collection-item-temp-egg';
+        
+        const textContentDiv = document.createElement('div');
+        textContentDiv.className = 'yummy-item-text-content';
+        textContentDiv.textContent = lyric;
+        item.appendChild(textContentDiv);
+        
+        collectionContent.prepend(item);
+        
+        setTimeout(() => {
+            item.style.opacity = '0';
+            item.style.maxHeight = '0';
+            item.style.paddingTop = '0';
+            item.style.paddingBottom = '0';
+            item.style.marginTop = '0';
+            item.style.marginBottom = '0';
+            item.style.borderWidth = '0';
+            setTimeout(() => {
+                if (item.parentNode) {
+                    item.remove();
+                }
+            }, 500); // Remove from DOM after transition
+        }, 30000); // 30 seconds
+    }
+
+    function restoreHighlight(element, highlightHTML) {
+        // Create a temporary div to parse the saved HTML
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = highlightHTML;
+    
+        const newNodes = [];
+        // Find all text nodes and highlighted spans in the saved HTML
+        tempDiv.childNodes.forEach(node => {
+            if (node.nodeType === Node.TEXT_NODE) {
+                newNodes.push(document.createTextNode(node.textContent));
+            } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'SPAN' && node.classList.contains('yummy-selection-highlight')) {
+                const span = document.createElement('span');
+                span.className = 'yummy-selection-highlight';
+                span.textContent = node.textContent;
+                span.addEventListener('click', () => unhighlightElement(span));
+                newNodes.push(span);
+            } else {
+                // For other nodes (like <b>, <i>), clone them
+                newNodes.push(node.cloneNode(true));
+            }
+        });
+    
+        // Replace the element's content with the new nodes
+        while (element.firstChild) {
+            element.removeChild(element.firstChild);
+        }
+        newNodes.forEach(node => {
+            element.appendChild(node);
+        });
     }
 
 
