@@ -1,6 +1,6 @@
 {
   "name": "yummy",
-  "version": "0.9.10",
+  "version": "1.0.0",
   "description": "精细取舍，便捷整合",
   "main": "content.js",
   "directories": {
