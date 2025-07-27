@@ -99,8 +99,8 @@ Yummy! 是一款浏览器扩展。您可以使用它快捷进行精细的上下�
 如果你觉得 Yummy! 对你很有帮助，不妨请我喝杯咖啡！您的支持是我持续更新和维护的最大动力。
 
 | 微信支付 | 支付宝 |
-|---|---|
-| <img src="assets/wechat_pay.png" alt="微信支付" width="200"> | <img src="assets/alipay_pay.png" alt="支付宝" width="200"> |
+|:---:|:---:|
+| <img src="assets/wechat_pay.jpg" alt="微信支付" width="200"> | <img src="assets/alipay_pay.jpg" alt="支付宝" width="200"> |
 
 您也可以通过加密货币支持我：
 
