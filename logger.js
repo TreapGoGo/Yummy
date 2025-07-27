@@ -57,7 +57,7 @@
 
         const titleSpan = document.createElement('span');
         titleSpan.id = 'yummy-log-title';
-        titleSpan.innerHTML = `<span>Yummy! 日志 (v2)</span><span style="font-weight:normal; font-size: 11px; margin-left: 10px;">(Level: ${Object.keys(logLevels).find(key => logLevels[key] === currentLevel)})</span>`;
+        titleSpan.innerHTML = `<span>Yummy! 日志 (v2.1)</span><span style="font-weight:normal; font-size: 11px; margin-left: 10px;">(Level: ${Object.keys(logLevels).find(key => logLevels[key] === currentLevel)})</span>`;
 
         const buttonContainer = document.createElement('div');
         Object.assign(buttonContainer.style, {
@@ -181,7 +181,7 @@
     }
 
     function appendLogEntry(level, message, args) {
-        const timestamp = new Date().toLocaleTimeString();
+        const timestamp = new Date().toLocaleTimeString('en-GB', { hour12: false });
         const levelName = Object.keys(logLevels).find(key => logLevels[key] === level);
 
         const logEntry = document.createElement('div');
@@ -197,9 +197,16 @@
         logEntry.style.marginBottom = '4px';
 
         const finalMessage = `[${timestamp} ${levelName}] ${message} ${formatArgs(args)}`;
-        logEntry.textContent = finalMessage;
+        const textNode = document.createTextNode(finalMessage);
+        logEntry.appendChild(textNode);
+        
         logContentDiv.appendChild(logEntry);
-        logContentDiv.scrollTop = logContentDiv.scrollHeight;
+        
+        // 智能滚动：只有当用户已经滚动到底部时才自动跟随
+        const isScrolledToBottom = logContentDiv.scrollHeight - logContentDiv.clientHeight <= logContentDiv.scrollTop + 1;
+        if (isScrolledToBottom) {
+            logContentDiv.scrollTop = logContentDiv.scrollHeight;
+        }
     }
 
 
@@ -237,7 +244,7 @@
                 logger.info(`Log level set to ${levelName.toUpperCase()}`);
                 const titleElement = document.getElementById('yummy-log-title');
                 if (titleElement) {
-                    titleElement.innerHTML = `<span>Yummy! 日志 (v2)</span><span style="font-weight:normal; font-size: 11px; margin-left: 10px;">(Level: ${levelName.toUpperCase()})</span>`;
+                    titleElement.innerHTML = `<span>Yummy! 日志 (v2.1)</span><span style="font-weight:normal; font-size: 11px; margin-left: 10px;">(Level: ${levelName.toUpperCase()})</span>`;
                 }
             } else {
                 logger.warn(`Invalid log level: ${levelName}`);
@@ -247,6 +254,8 @@
             if (isInitialized) return;
             // The actual UI creation is deferred until this init() is called.
             createLogContainer();
+            // Default to a less noisy level, can be overridden in console.
+            logger.setLevel('INFO'); 
         }
     };
 

@@ -1,5 +1,5 @@
 /*
-  Yummy! 内容脚本 (v0.4.4)
+  Yummy! 内容脚本 (v0.9.9)
 
   这是 Yummy! 扩展的核心脚本，负责向 ChatGPT 页面注入所有交互功能。
   其主要功能模块包括：
@@ -203,10 +203,7 @@
     const CONTENT_ELEMENTS_SELECTOR = `[data-message-author-role="assistant"] h1, [data-message-author-role="assistant"] h2, [data-message-author-role="assistant"] h3, [data-message-author-role="assistant"] h4, [data-message-author-role="assistant"] h5, [data-message-author-role="assistant"] h6, [data-message-author-role="assistant"] p, [data-message-author-role="assistant"] pre, [data-message-author-role="assistant"] li, [data-message-author-role="assistant"] table`;
 
     async function processNewElements() {
-        if (isUnHighlighting) {
-            logger.debug("processNewElements skipped due to un-highlighting lock.");
-            return;
-        }
+        // 旧的 isUnHighlighting 锁检查已被移除，新的锁机制在 debouncedProcessNewElements 中处理
         const elementsToProcess = document.querySelectorAll(CONTENT_ELEMENTS_SELECTOR);
     
         for (const element of elementsToProcess) {
@@ -220,6 +217,7 @@
                 // AND not already present in the DOM for this element. This prevents
                 // re-running the destructive innerHTML operation on subsequent updates.
                 if (savedData.highlightHTML && !element.querySelector('.yummy-selection-highlight')) {
+                    logger.debug(`processNewElements: 正在为 ${elementId} 恢复高亮`, { html: savedData.highlightHTML });
                     restoreHighlight(element, savedData.highlightHTML);
                 }
     
@@ -337,7 +335,11 @@
     const debouncedProcessNewElements = () => {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(async () => {
+            // 在处理任何新元素前，必须等待当前所有的高亮操作（添加/删除）完成。
+            // 这是确保我们不会在 unhighlight 刚移除DOM节点但还未保存数据时进行重绘的关键。
+            await highlightLock;
             messageElementsCache.clear(); // Clear cache before processing
+            logger.debug("debouncedProcessNewElements: 锁已释放，开始处理新元素。");
             await processNewElements();
         }, 500);
     };
@@ -363,7 +365,12 @@
     let collectionItemStates = new Map();
     let isMarkdownMode = false; // 新增状态，控制面板显示模式
     let turndownService; // 用于转换 HTML 到 Markdown
-    let isUnHighlighting = false; // 新增：防止取消高亮时触发重绘的锁
+    // let isUnHighlighting = false; // 废弃旧的锁机制
+
+    // vNext: 新增一个更可靠的异步锁，用于同步所有可能冲突的重绘和数据操作。
+    // 所有修改高亮状态的函数都必须先等待这个锁，并在执行关键代码时"持有"它。
+    let highlightLock = Promise.resolve();
+
 
     // --- Easter Egg State ---
     const likeClickTracker = new Map();
@@ -706,24 +713,33 @@
 
 
     async function highlightSelection(range) {
+        let releaseLock;
+        highlightLock = highlightLock.then(() => new Promise(resolve => {
+            releaseLock = resolve;
+        }));
+
+        logger.group('highlightSelection: 开始应用高亮');
         const selection = window.getSelection();
-        const effectiveRange = range || (selection.rangeCount > 0 ? selection.getRangeAt(0) : null);
-
-        if (!effectiveRange || effectiveRange.collapsed) {
-            if (selection.rangeCount > 0) selection.removeAllRanges();
-            return;
-        }
-
-        const ancestor = effectiveRange.commonAncestorContainer;
-        const assistantMessageContainer = (ancestor.nodeType === Node.ELEMENT_NODE ? ancestor : ancestor.parentElement)
-            .closest('[data-message-author-role="assistant"]');
-
-        if (!assistantMessageContainer || (ancestor.nodeType === Node.ELEMENT_NODE && ancestor.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-collection-panel'))) {
-            if (selection.rangeCount > 0) selection.removeAllRanges();
-            return;
-        }
 
         try {
+            const effectiveRange = range || (selection.rangeCount > 0 ? selection.getRangeAt(0) : null);
+
+            if (!effectiveRange || effectiveRange.collapsed) {
+                if (selection.rangeCount > 0) selection.removeAllRanges();
+                logger.debug("highlightSelection: 无有效选中范围，操作取消。");
+                return;
+            }
+
+            const ancestor = effectiveRange.commonAncestorContainer;
+            const assistantMessageContainer = (ancestor.nodeType === Node.ELEMENT_NODE ? ancestor : ancestor.parentElement)
+                .closest('[data-message-author-role="assistant"]');
+
+            if (!assistantMessageContainer || (ancestor.nodeType === Node.ELEMENT_NODE && ancestor.closest('.yummy-control-panel, .yummy-rating-bar, #yummy-collection-panel'))) {
+                if (selection.rangeCount > 0) selection.removeAllRanges();
+                logger.debug("highlightSelection: 选中内容不在有效区域，操作取消。");
+                return;
+            }
+
             const intersectingBlocks = Array.from(assistantMessageContainer.querySelectorAll(CONTENT_ELEMENTS_SELECTOR))
                 .filter(block => effectiveRange.intersectsNode(block) && !block.closest('.yummy-rating-bar'));
 
@@ -753,44 +769,57 @@
                         highlightSpan.appendChild(contents);
                         intersectionRange.insertNode(highlightSpan);
                     } catch (e) {
-                        logger.warn('Failed to wrap content for highlighting.', e);
+                        logger.warn('highlightSelection: 包装内容时失败。', e);
                     }
                 }
             }
 
             finalBlocks.forEach(block => normalizeHighlights(block));
+            
+            const allBlocksInContainer = new Set(finalBlocks);
+            const savePromises = [];
+            for (const block of allBlocksInContainer) {
+                const elementId = getStableElementId(block);
+                if (elementId) {
+                    const hasHighlights = block.querySelector('.yummy-selection-highlight');
+                    const oldState = currentConversationState[elementId] || {};
+                    const newHTML = hasHighlights ? block.innerHTML : null;
 
-        } catch (e) {
-            logger.warn('Highlighting failed due to an unexpected error.', e);
-        } finally {
-            if (selection.rangeCount > 0) selection.removeAllRanges();
-        }
-
-        const allBlocksInContainer = assistantMessageContainer.querySelectorAll(CONTENT_ELEMENTS_SELECTOR);
-        for (const block of allBlocksInContainer) {
-            const elementId = getStableElementId(block);
-            if (elementId) {
-                const hasHighlights = block.querySelector('.yummy-selection-highlight');
-                const oldState = currentConversationState[elementId] || {};
-                const newHTML = hasHighlights ? block.innerHTML : null;
-
-                if (oldState.highlightHTML !== newHTML) {
-                    await saveData(elementId, { highlightHTML: newHTML });
+                    if (oldState.highlightHTML !== newHTML) {
+                        logger.debug(`highlightSelection: 准备为 ${elementId} 保存数据`, { newHTML });
+                        savePromises.push(saveData(elementId, { highlightHTML: newHTML }));
+                    }
                 }
             }
+            await Promise.all(savePromises);
+            logger.info('highlightSelection: 新增高亮数据已保存。');
+            
+            syncCollectionPanelWithDOM();
+        } catch (e) {
+            logger.error('highlightSelection: 高亮过程中发生错误。', e);
+        } finally {
+            if (selection.rangeCount > 0) selection.removeAllRanges();
+            logger.groupEnd();
+            if (releaseLock) releaseLock();
         }
-
-        syncCollectionPanelWithDOM();
     }
 
     async function unhighlightElement(clickedElement) {
-        if (isUnHighlighting) return;
-        isUnHighlighting = true;
+        let releaseLock;
+        // 关键：在现有锁之后链接此操作，并创建一个新的未解决的 Promise 作为新的锁。
+        highlightLock = highlightLock.then(() => new Promise(resolve => {
+            releaseLock = resolve;
+        }));
+    
+        logger.group('unhighlightElement: 开始移除高亮');
     
         try {
             const blocksToUpdate = new Set();
             const parentBlock = getContainingBlock(clickedElement);
-            if (parentBlock) blocksToUpdate.add(parentBlock);
+            if (parentBlock) {
+                blocksToUpdate.add(parentBlock);
+                logger.debug('unhighlightElement: 找到父区块', parentBlock);
+            }
     
             const parent = clickedElement.parentNode;
             if (parent) {
@@ -798,11 +827,13 @@
                     parent.insertBefore(clickedElement.firstChild, clickedElement);
                 }
                 parent.removeChild(clickedElement);
+                logger.debug('unhighlightElement: 已将高亮标签从DOM中移除');
             }
     
             // After removing, re-normalize the affected block to merge any now-adjacent highlights
             if (parentBlock) {
                  normalizeHighlights(parentBlock);
+                 logger.debug('unhighlightElement: 已对父区块进行标准化处理');
             }
     
             const savePromises = Array.from(blocksToUpdate).map(async (block) => {
@@ -810,25 +841,35 @@
                 const elementId = getStableElementId(block);
                 if (elementId) {
                     const remainingHighlights = block.querySelector('.yummy-selection-highlight');
-                    await saveData(elementId, { highlightHTML: remainingHighlights ? block.innerHTML : null });
+                    const newHTML = remainingHighlights ? block.innerHTML : null;
+                    logger.debug(`unhighlightElement: 准备为 ${elementId} 保存数据`, { newHTML });
+                    // 关键：等待数据保存完成
+                    await saveData(elementId, { highlightHTML: newHTML });
                 }
             });
     
             await Promise.all(savePromises);
+            logger.info(`unhighlightElement: 高亮数据已成功保存。`);
             
-            logger.info('高亮已移除。');
+            // 数据完全保存后，再同步UI
             syncCollectionPanelWithDOM();
         } catch (error) {
-            logger.error('Failed during unhighlighting:', error);
+            logger.error('unhighlightElement: 移除高亮过程中发生错误:', error);
         } finally {
-            setTimeout(() => { isUnHighlighting = false; }, 100); // Increased delay for safety
+            logger.groupEnd();
+            // 关键：所有操作完成后，解析Promise，释放锁给下一个等待的操作。
+            if (releaseLock) {
+                releaseLock();
+            }
         }
     }
 
     function handleTextSelection(event) {
         // Debounce mouseup to handle messy selection state from GPT's UI
-        setTimeout(() => {
-            if (isUnHighlighting) return;
+        setTimeout(async () => {
+            // 在处理文本选择之前，先等待任何可能正在进行的（取消）高亮操作完成。
+            await highlightLock;
+
             const selection = window.getSelection();
             if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
                 if (quickHighlightButton) quickHighlightButton.style.display = 'none';
@@ -836,7 +877,7 @@
             }
     
             if (isSelectionModeActive) {
-                highlightSelection();
+                await highlightSelection();
                 return;
             }
     
